@@ -4,23 +4,15 @@ import { AppError } from '../utils/errors.js'
 
 let client
 
-export function mapOpenAIError(error) {
+export function mapGroqError(error) {
   const status = error?.status ?? error?.statusCode
   const providerCode = error?.code ?? error?.error?.code
-  const providerType = error?.type ?? error?.error?.type
+  const providerMessage = error?.error?.message ?? error?.message
 
-  if (providerCode === 'credit_balance_exhausted' || providerType === 'insufficient_quota') {
-    return new AppError(
-      402,
-      'The OpenAI account has no available API credits. Add credits or use a valid billing-enabled API key.',
-      'AI_INSUFFICIENT_QUOTA',
-      { providerCode: 'credit_balance_exhausted' },
-    )
-  }
   if (status === 429) {
     return new AppError(
       429,
-      'The AI provider rate limit was reached. Please retry later.',
+      'Groq free-tier usage limit reached. Please wait for the limit to reset or review your Groq usage limits.',
       'AI_RATE_LIMIT',
       providerCode ? { providerCode } : undefined,
     )
@@ -28,7 +20,7 @@ export function mapOpenAIError(error) {
   if (status === 401 || status === 403) {
     return new AppError(
       502,
-      'The AI provider rejected the configured credentials.',
+      'Groq rejected the configured API key. Check GROQ_API_KEY in server/.env.',
       'AI_AUTHENTICATION_ERROR',
       providerCode ? { providerCode } : undefined,
     )
@@ -36,15 +28,15 @@ export function mapOpenAIError(error) {
   if (status === 404) {
     return new AppError(
       502,
-      'The configured OpenAI model is unavailable.',
+      'The configured Groq model is unavailable. Check GROQ_MODEL.',
       'AI_MODEL_UNAVAILABLE',
       providerCode ? { providerCode } : undefined,
     )
   }
   if (status === 400) {
     return new AppError(
-      400,
-      'The AI provider rejected the generation request.',
+      502,
+      'Groq rejected the generation request. The selected model may not support the requested JSON response format.',
       'AI_REQUEST_REJECTED',
       providerCode ? { providerCode } : undefined,
     )
@@ -52,15 +44,20 @@ export function mapOpenAIError(error) {
   if (status >= 500) {
     return new AppError(
       502,
-      'The AI provider is temporarily unavailable.',
+      'Groq is temporarily unavailable. Please try again.',
       'AI_PROVIDER_UNAVAILABLE',
       providerCode ? { providerCode } : undefined,
     )
   }
 
+  console.error('Groq API request failed:', {
+    status,
+    code: providerCode,
+    message: providerMessage,
+  })
   return new AppError(
     502,
-    'The AI provider request failed.',
+    'The Groq API request failed. Check the backend terminal for provider details.',
     'AI_REQUEST_FAILED',
     providerCode ? { providerCode } : undefined,
   )
@@ -68,49 +65,53 @@ export function mapOpenAIError(error) {
 
 export function getOpenAIStatus() {
   return {
-    configured: Boolean(env.OPENAI_API_KEY),
-    model: env.OPENAI_MODEL,
+    configured: Boolean(env.GROQ_API_KEY),
+    model: env.GROQ_MODEL,
   }
 }
 
 export function getOpenAIClient() {
-  if (!env.OPENAI_API_KEY) return null
-  client ??= new OpenAI({ apiKey: env.OPENAI_API_KEY })
+  if (!env.GROQ_API_KEY) return null
+  client ??= new OpenAI({
+    apiKey: env.GROQ_API_KEY,
+    baseURL: 'https://api.groq.com/openai/v1',
+  })
   return client
 }
 
 export async function generateStructuredResponse({ prompt, input, schemaName, schema }) {
-  const openAIClient = getOpenAIClient()
-  if (!openAIClient) {
+  const groqClient = getOpenAIClient()
+  if (!groqClient) {
     throw new AppError(
       501,
-      'AI timetable generation is not configured. No study timetable was generated.',
+      'AI timetable generation is not configured. Add GROQ_API_KEY to server/.env. No study timetable was generated.',
       'AI_GENERATION_NOT_CONFIGURED',
-      { configured: false, model: env.OPENAI_MODEL },
+      { configured: false, model: env.GROQ_MODEL },
     )
   }
 
   try {
-    const response = await openAIClient.responses.create({
-      model: env.OPENAI_MODEL,
-      instructions: prompt,
-      input: JSON.stringify(input),
-      text: {
-        format: {
-          type: 'json_schema',
-          name: schemaName,
-          strict: true,
-          schema,
+    const response = await groqClient.chat.completions.create({
+      model: env.GROQ_MODEL,
+      messages: [
+        {
+          role: 'system',
+          content: `${prompt}\n\nReturn only a JSON object matching this schema. Do not include Markdown fences or commentary:\n${JSON.stringify(schema)}`,
         },
-      },
+        {
+          role: 'user',
+          content: JSON.stringify(input),
+        },
+      ],
+      response_format: { type: 'json_object' },
       temperature: 0.2,
     })
 
-    const text = response.output_text
+    const text = response.choices?.[0]?.message?.content
     if (!text) {
       throw new AppError(
         502,
-        'The AI provider returned no structured output.',
+        'Groq returned no structured output.',
         'AI_EMPTY_RESPONSE',
       )
     }
@@ -120,12 +121,12 @@ export async function generateStructuredResponse({ prompt, input, schemaName, sc
     } catch {
       throw new AppError(
         502,
-        'The AI provider returned invalid JSON.',
+        'Groq returned invalid JSON.',
         'AI_INVALID_JSON',
       )
     }
   } catch (error) {
     if (error instanceof AppError) throw error
-    throw mapOpenAIError(error)
+    throw mapGroqError(error)
   }
 }
