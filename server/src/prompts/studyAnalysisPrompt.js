@@ -8,6 +8,7 @@ For every supplied subject and topic:
 - Recommend a realistic study-time allocation that stays within the supplied daily availability and preparation period.
 - Define revision requirements based on exam urgency and the supplied revision preferences.
 - Explain the prioritization reasoning using only supplied facts.
+- Preserve every supplied subject exactly and preserve every supplied topic exactly. Do not omit or add subjects/topics.
 
 The analysis stage must not create a timetable or report that a timetable was generated.`
 

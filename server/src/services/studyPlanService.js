@@ -50,17 +50,57 @@ function validateAnalysisOutput(analysis, studentInput) {
     studentInput.subjects.map((subject) => [subject.name.trim().toLowerCase(), new Set(subject.topics.map((topic) => topic.trim().toLowerCase()))]),
   )
 
+  if (parsed.subjects.length !== suppliedSubjects.size) {
+    throw new AppError(
+      502,
+      'AI analysis omitted or duplicated supplied subjects.',
+      'AI_INVALID_ANALYSIS',
+    )
+  }
+
+  const analyzedSubjects = new Set()
   parsed.subjects.forEach((subject) => {
     const subjectName = subject.subject.trim().toLowerCase()
     if (!suppliedSubjects.has(subjectName)) {
       throw new AppError(502, 'AI analysis introduced an unknown subject.', 'AI_INVALID_ANALYSIS')
     }
+    if (analyzedSubjects.has(subjectName)) {
+      throw new AppError(502, 'AI analysis duplicated a supplied subject.', 'AI_INVALID_ANALYSIS')
+    }
+    analyzedSubjects.add(subjectName)
     const topics = suppliedSubjects.get(subjectName)
+    if (subject.topics.length !== topics.size) {
+      throw new AppError(502, 'AI analysis omitted or duplicated supplied topics.', 'AI_INVALID_ANALYSIS')
+    }
+    const analyzedTopics = new Set()
     subject.topics.forEach((topic) => {
-      if (!topics.has(topic.topic.trim().toLowerCase())) {
+      const topicName = topic.topic.trim().toLowerCase()
+      if (!topics.has(topicName)) {
         throw new AppError(502, 'AI analysis introduced an unknown topic.', 'AI_INVALID_ANALYSIS')
       }
+      if (analyzedTopics.has(topicName)) {
+        throw new AppError(502, 'AI analysis duplicated a supplied topic.', 'AI_INVALID_ANALYSIS')
+      }
+      analyzedTopics.add(topicName)
     })
+  })
+
+  for (const subjectName of suppliedSubjects.keys()) {
+    if (!analyzedSubjects.has(subjectName)) {
+      throw new AppError(502, 'AI analysis omitted a supplied subject.', 'AI_INVALID_ANALYSIS')
+    }
+  }
+
+  const analyzedRevisionSubjects = new Set()
+  parsed.revisionRequirements.forEach((requirement) => {
+    const subjectName = requirement.subject.trim().toLowerCase()
+    if (!suppliedSubjects.has(subjectName)) {
+      throw new AppError(502, 'AI analysis added an unknown revision subject.', 'AI_INVALID_ANALYSIS')
+    }
+    if (analyzedRevisionSubjects.has(subjectName)) {
+      throw new AppError(502, 'AI analysis duplicated a revision subject.', 'AI_INVALID_ANALYSIS')
+    }
+    analyzedRevisionSubjects.add(subjectName)
   })
 
   return parsed
@@ -70,14 +110,16 @@ function buildRefinementPrompt(validation) {
   return `${timetableGenerationPrompt}
 
 Refinement required: the previous timetable failed programmatic validation.
-Correct every listed error and preserve all hard constraints.
-Validation errors:
+Correct every listed error and coverage gap and preserve all hard constraints.
+Validation errors and coverage gaps:
 ${JSON.stringify(validation.errors)}
+Validation warnings:
+${JSON.stringify(validation.warnings)}
 
 Do not return an explanation instead of the JSON timetable.`
 }
 
-export async function generateStudyPlan(input) {
+export async function generateStudyPlan(input, dependencies = {}) {
   let studentInput
   try {
     studentInput = studyPlanSchema.parse(input)
@@ -88,7 +130,10 @@ export async function generateStudyPlan(input) {
     throw error
   }
 
-  const openAI = getOpenAIStatus()
+  const openAIStatus = dependencies.getOpenAIStatus || getOpenAIStatus
+  const structuredResponse = dependencies.generateStructuredResponse || generateStructuredResponse
+  const planningDate = dependencies.planningDate || new Date().toISOString().slice(0, 10)
+  const openAI = openAIStatus()
   if (!openAI.configured) {
     throw new AppError(
       501,
@@ -99,14 +144,14 @@ export async function generateStudyPlan(input) {
   }
 
   // Stage 1: analyze priorities without creating sessions.
-  const rawAnalysis = await generateStructuredResponse({
+  const rawAnalysis = await structuredResponse({
     prompt: studyAnalysisPrompt,
     input: {
       subjects: studentInput.subjects,
       exams: studentInput.exams,
       availability: studentInput.availability,
       preferences: studentInput.preferences || {},
-      currentDate: new Date().toISOString().slice(0, 10),
+      currentDate: planningDate,
     },
     schemaName: 'prepwise_study_analysis',
     schema: studyAnalysisJsonSchema,
@@ -122,14 +167,14 @@ export async function generateStudyPlan(input) {
     throw error
   }
 
-  const maxAttempts = env.STUDY_PLAN_REFINEMENT_LIMIT
+  const maxAttempts = dependencies.refinementLimit ?? env.STUDY_PLAN_REFINEMENT_LIMIT
   let timetable
   let validation
   let refinementAttempts = 0
 
   // Stage 2: generate a timetable, then independently validate every hard constraint.
   for (let attempt = 0; attempt <= maxAttempts; attempt += 1) {
-    const rawTimetable = await generateStructuredResponse({
+    const rawTimetable = await structuredResponse({
       prompt: attempt === 0
         ? timetableGenerationPrompt
         : buildRefinementPrompt(validation),
@@ -137,7 +182,7 @@ export async function generateStudyPlan(input) {
         studentInput,
         analysis,
         previousValidation: attempt === 0 ? null : validation,
-        currentDate: new Date().toISOString().slice(0, 10),
+        currentDate: planningDate,
       },
       schemaName: 'prepwise_timetable',
       schema: timetableJsonSchema,
@@ -160,7 +205,10 @@ export async function generateStudyPlan(input) {
     }
 
     timetable = parsedTimetable.timetable
-    validation = validateTimetable(timetable, studentInput)
+    validation = validateTimetable(timetable, studentInput, {
+      planningDate,
+      requiredTopicCoverage: env.TOPIC_COVERAGE_REQUIRED,
+    })
     refinementAttempts = attempt
     if (validation.valid) break
   }

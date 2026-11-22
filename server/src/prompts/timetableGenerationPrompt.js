@@ -4,6 +4,8 @@ Use the supplied student input and the analysis-stage output. Do not invent subj
 
 Generate a realistic timetable that:
 - Uses only supplied subjects and supplied syllabus topics.
+- Schedule every supplied topic where the preparation window and daily availability make coverage feasible.
+- If a topic cannot feasibly fit, report it as a missing topic rather than inventing or dropping a topic silently.
 - Uses dates from today through the relevant supplied examination dates.
 - Never schedules a subject after that subject's latest relevant examination date.
 - Uses the preferred start time and does not exceed daily available study hours.

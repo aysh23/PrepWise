@@ -7,6 +7,7 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().trim().optional(),
   OPENAI_MODEL: z.string().trim().min(1).default('gpt-4o-mini'),
   STUDY_PLAN_REFINEMENT_LIMIT: z.coerce.number().int().min(0).max(2).default(2),
+  TOPIC_COVERAGE_REQUIRED: z.enum(['true', 'false']).transform((value) => value === 'true').default('true'),
 })
 
 const parsed = envSchema.safeParse(process.env)
