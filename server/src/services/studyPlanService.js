@@ -2,7 +2,7 @@ import { z, ZodError } from 'zod'
 import { env } from '../config/env.js'
 import { AppError } from '../utils/errors.js'
 import { studyPlanSchema } from '../validators/studyPlanSchema.js'
-import { generateStructuredResponse, getOpenAIStatus } from './openaiService.js'
+import { generateStructuredResponse, getGroqStatus } from './openaiService.js'
 import { validateTimetable } from './timetableValidator.js'
 import { studyAnalysisPrompt, studyAnalysisJsonSchema } from '../prompts/studyAnalysisPrompt.js'
 import { timetableGenerationPrompt, timetableJsonSchema } from '../prompts/timetableGenerationPrompt.js'
@@ -130,16 +130,16 @@ export async function generateStudyPlan(input, dependencies = {}) {
     throw error
   }
 
-  const openAIStatus = dependencies.getOpenAIStatus || getOpenAIStatus
+  const groqStatus = dependencies.getGroqStatus || getGroqStatus
   const structuredResponse = dependencies.generateStructuredResponse || generateStructuredResponse
   const planningDate = dependencies.planningDate || new Date().toISOString().slice(0, 10)
-  const openAI = openAIStatus()
-  if (!openAI.configured) {
+  const groq = groqStatus()
+  if (!groq.configured) {
     throw new AppError(
       501,
       'AI timetable generation is not configured. No study timetable was generated.',
       'AI_GENERATION_NOT_CONFIGURED',
-      { configured: false, model: openAI.model },
+      { configured: false, model: groq.model },
     )
   }
 
@@ -230,7 +230,7 @@ export async function generateStudyPlan(input, dependencies = {}) {
     timetable,
     validation,
     generation: {
-      model: openAI.model,
+      model: groq.model,
       refinementAttempts,
     },
   }
