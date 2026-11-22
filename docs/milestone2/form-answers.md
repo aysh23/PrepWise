@@ -11,8 +11,8 @@ Use this alongside the Microsoft Form titled **Milestone 2 - Submission Form for
 | 5 | Team Leader Enrollment No. | `S24CSEU2283` |
 | 6 | Group/Batch | `B81-93` |
 | 7 | All team enrollment numbers (one per line) | `S24CSEU2283` / `S24CSEU2306` / `S24CSEU2294` / `S24CSEU2290` |
-| 8 | Project Type | Select **App with code**. Do not select No-code app. |
-| 9 | Main AI tool and model used | `Groq API - openai/gpt-oss-120b (Groq-hosted model via Groq's OpenAI-compatible API endpoint)` |
+| 8 | Project Type | **Change the current saved selection:** it is incorrectly set to No-code app. Clear that option and select **App with code**. The current product is a coded React/Vite + Express application. |
+| 9 | Main AI tool and model used | `Groq API - openai/gpt-oss-120b (Groq-hosted model accessed via Groq's OpenAI-compatible Chat Completions API). During earlier prompt exploration ChatGPT GPT-6 was also used; the current integrated application uses Groq.` |
 | 10 | Number of prompts in final solution | `3` logical prompt forms: study-priority analysis, initial timetable generation, validation-guided refinement. There are 2 standalone prompt template files; the refinement prompt is constructed dynamically. |
 | 11 | Prototype link | **Pending public deployment.** A `localhost` URL is not acceptable. Deploy the frontend and backend publicly, then paste the public frontend URL here. |
 | 12 | Git repository / Drive link | `https://github.com/aysh23/PrepWise` |
@@ -21,7 +21,7 @@ Use this alongside the Microsoft Form titled **Milestone 2 - Submission Form for
 | 15 | Supporting document type | Select **Technical Report**. |
 | 16 | Upload supporting PDF | Upload `PrepWise_Milestone_2_Technical_Report.pdf` (under 10 MB). |
 | 17 | Number of test inputs in test table | `12` (use the twelve validator scenarios in `test-evidence.md`). |
-| 18 | Number of prompt versions in iteration log | `3` documented design versions. V1 is explicitly a retrospectively documented baseline concept, not a live model trial; V2 and V3 reflect implemented refinements. Do not claim measured A/B improvements. |
+| 18 | Number of prompt versions in iteration log | `3` documented prompt versions (V1 baseline design draft, V2 chained analysis/scheduling prompts, V3 structured output with validation-guided refinement). Exact saved versions are in `docs/milestone2/prompt-versions/`. V1 is a saved design draft, not a live model trial; no measured A/B improvements are claimed. |
 | 19 | Current prototype status | Select **Some modules working** (conservative status; core generation and validation modules have been demonstrated, but no public deployment/reel evidence is ready yet). |
 | 20 | Names of working modules (one per line) | Subject/topic input wizard; examination date and priority setup; availability and study preference setup; AI study-priority analysis through Groq; AI day-wise timetable generation through Groq; JSON parsing, Zod validation and timetable constraint checking; validation-guided refinement and bounded retry; study-plan display, session mapping and browser localStorage persistence. |
 | 21 | Upload Milestone 2 PDF | Upload the same technical report PDF from Q16 if the form's separate upload is required. |
