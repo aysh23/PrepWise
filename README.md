@@ -73,3 +73,14 @@ Run backend checks from the `server` directory:
 npm test
 npm run build
 ```
+
+
+## Milestone 2 evidence
+
+Supporting Prompt Engineering Milestone 2 materials are in [docs/milestone2](docs/milestone2/):
+
+- [Prompt iteration log](docs/milestone2/prompt-iteration-log.md)
+- [Automated test evidence](docs/milestone2/test-evidence.md)
+- [Microsoft Forms answer sheet](docs/milestone2/form-answers.md)
+- [120-second demo video script](docs/milestone2/video-script.md)
+- [Render public demo deployment guide](docs/milestone2/render-deployment.md)
