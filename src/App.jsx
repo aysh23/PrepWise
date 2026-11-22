@@ -5,6 +5,8 @@ import {
   Plus, RefreshCw, Search, Settings, Sparkles, Target, Trash2, User,
   BookOpen, X, Edit3
 } from 'lucide-react'
+import { studyRepository } from './services/studyRepository'
+import { requestStudyPlan } from './services/planGenerationService'
 import './App.css'
 
 const NAV_ITEMS = [
@@ -15,18 +17,8 @@ const NAV_ITEMS = [
   { id: 'settings', label: 'Settings', icon: Settings },
 ]
 
-const DEFAULT_SUBJECTS = [
-  { id: 'sub-1', name: 'Data Structures', topics: ['Trees', 'Graphs', 'Dynamic Programming'], difficulty: 'Hard', confidence: 'Medium', progress: 68 },
-  { id: 'sub-2', name: 'Calculus II', topics: ['Integration', 'Series', 'Multiple integrals'], difficulty: 'Hard', confidence: 'Low', progress: 42 },
-  { id: 'sub-3', name: 'Database Systems', topics: ['SQL', 'Normalization', 'Transactions'], difficulty: 'Medium', confidence: 'High', progress: 76 },
-  { id: 'sub-4', name: 'Digital Logic', topics: ['Boolean Algebra', 'Sequential Circuits'], difficulty: 'Easy', confidence: 'High', progress: 85 },
-]
-
-const DEFAULT_EXAMS = [
-  { id: 'exam-1', subjectId: 'sub-1', subject: 'Data Structures', date: '2026-12-08', priority: 'High' },
-  { id: 'exam-2', subjectId: 'sub-2', subject: 'Calculus II', date: '2026-12-12', priority: 'High' },
-  { id: 'exam-3', subjectId: 'sub-3', subject: 'Database Systems', date: '2026-12-18', priority: 'Medium' },
-]
+const DEFAULT_SUBJECTS = []
+const DEFAULT_EXAMS = []
 
 const DEFAULT_AVAILABILITY = {
   hours: 5, startTime: '09:00', sessionDuration: 50, breakDuration: 10,
@@ -40,19 +32,30 @@ const defaultPreferences = {
   mockTests: true,
 }
 
-const DEFAULT_SESSIONS = [
-  { id: 'ses-1', date: '2026-11-23', startTime: '09:00', endTime: '10:00', subject: 'Calculus II', topic: 'Integration techniques', type: 'Learning', duration: 60, completed: false },
-  { id: 'ses-2', date: '2026-11-23', startTime: '10:30', endTime: '11:30', subject: 'Data Structures', topic: 'Graph traversals', type: 'Practice', duration: 60, completed: false },
-  { id: 'ses-3', date: '2026-11-23', startTime: '14:00', endTime: '15:00', subject: 'Database Systems', topic: 'Transactions', type: 'Revision', duration: 60, completed: true },
-]
+const DEFAULT_SESSIONS = []
 
 function loadState(key, fallback) {
-  try {
-    const stored = localStorage.getItem(key)
-    return stored ? JSON.parse(stored) : fallback
-  } catch {
-    return fallback
-  }
+  return studyRepository.load(key, fallback)
+}
+
+function timeToMinutes(time) {
+  if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(time || '')) return null
+  const [hours, minutes] = time.split(':').map(Number)
+  return hours * 60 + minutes
+}
+
+function formatLocalDate(date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function isValidExamDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return false
+  const date = new Date(`${value}T00:00:00`)
+  if (Number.isNaN(date.getTime()) || formatLocalDate(date) !== value) return false
+  return value >= formatLocalDate(new Date())
 }
 
 function App() {
@@ -65,12 +68,12 @@ function App() {
   const [sessions, setSessions] = useState(() => loadState('prepwise_sessions', DEFAULT_SESSIONS))
   const [planStatus, setPlanStatus] = useState(() => loadState('prepwise_plan_status', 'Draft plan'))
 
-  useEffect(() => localStorage.setItem('prepwise_subjects', JSON.stringify(subjects)), [subjects])
-  useEffect(() => localStorage.setItem('prepwise_exams', JSON.stringify(exams)), [exams])
-  useEffect(() => localStorage.setItem('prepwise_availability', JSON.stringify(availability)), [availability])
-  useEffect(() => localStorage.setItem('prepwise_preferences', JSON.stringify(preferences)), [preferences])
-  useEffect(() => localStorage.setItem('prepwise_sessions', JSON.stringify(sessions)), [sessions])
-  useEffect(() => localStorage.setItem('prepwise_plan_status', JSON.stringify(planStatus)), [planStatus])
+  useEffect(() => studyRepository.save('subjects', subjects), [subjects])
+  useEffect(() => studyRepository.save('exams', exams), [exams])
+  useEffect(() => studyRepository.save('availability', availability), [availability])
+  useEffect(() => studyRepository.save('preferences', preferences), [preferences])
+  useEffect(() => studyRepository.save('sessions', sessions), [sessions])
+  useEffect(() => studyRepository.save('plan_status', planStatus), [planStatus])
 
   const navigate = (page) => {
     setActivePage(page)
@@ -78,7 +81,6 @@ function App() {
   }
 
   const generatePlan = (input) => {
-    setPlanStatus('Planning...')
     const nextSubjects = input?.subjects?.length ? input.subjects : subjects
     const nextExams = input?.exams?.length ? input.exams : exams
     const nextAvailability = input?.availability || availability
@@ -88,35 +90,8 @@ function App() {
     setExams(nextExams)
     setAvailability(nextAvailability)
     setPreferences(nextPreferences)
-
-    setTimeout(() => {
-      const start = new Date()
-      const startTime = nextAvailability.startTime || '09:00'
-      const generated = nextExams.slice(0, 7).map((exam, index) => {
-        const date = new Date(start)
-        date.setDate(start.getDate() + index)
-        const [hours, minutes] = startTime.split(':').map(Number)
-        const duration = Number(nextAvailability.sessionDuration) || 50
-        const endMinutes = hours * 60 + minutes + duration
-        const subject = nextSubjects.find((item) => item.id === exam.subjectId) || nextSubjects[index % nextSubjects.length]
-        const topic = subject?.topics?.[index % (subject.topics?.length || 1)] || 'Syllabus review'
-        const endTime = `${String(Math.floor(endMinutes / 60)).padStart(2, '0')}:${String(endMinutes % 60).padStart(2, '0')}`
-        return {
-          id: `generated-${Date.now()}-${index}`,
-          date: date.toISOString().slice(0, 10),
-          startTime,
-          endTime,
-          subject: subject?.name || exam.subject,
-          topic,
-          type: index % 4 === 2 && nextPreferences.practiceQuestions ? 'Practice' : index % 4 === 3 ? 'Mock Test' : 'Learning',
-          duration,
-          completed: false,
-        }
-      })
-      setSessions(generated)
-      setPlanStatus('Ready')
-      navigate('plan')
-    }, 900)
+    setPlanStatus('AI generation unavailable')
+    return requestStudyPlan()
   }
 
   return (
@@ -141,8 +116,8 @@ function App() {
         <div className="sidebar-footer">
           <button className="support-link"><CircleHelp size={18} /> Help & support</button>
           <div className="profile-mini">
-            <div className="avatar">AS</div>
-            <div><strong>Ayush Sharma</strong><span>University Student</span></div>
+            <div className="avatar"><User size={16} /></div>
+            <div><strong>Student</strong><span>Personal workspace</span></div>
             <MoreHorizontal size={18} />
           </div>
         </div>
@@ -155,7 +130,7 @@ function App() {
           <div className="search-box"><Search size={18} /><input placeholder="Search subjects, topics..." /></div>
           <div className="topbar-actions">
             <button className="icon-button" aria-label="Notifications"><Bell size={19} /><span className="notification-dot" /></button>
-            <div className="avatar small">AS</div>
+            <div className="avatar small"><User size={15} /></div>
           </div>
         </header>
 
@@ -165,7 +140,6 @@ function App() {
             exams={exams}
             sessions={sessions}
             availability={availability}
-            planStatus={planStatus}
             onNavigate={navigate}
           />
         )}
@@ -173,7 +147,14 @@ function App() {
           <CreatePlan subjects={subjects} exams={exams} availability={availability} preferences={preferences} onGenerate={generatePlan} onCancel={() => navigate('dashboard')} />
         )}
         {activePage === 'plan' && (
-          <StudyPlan sessions={sessions} planStatus={planStatus} onSessionsChange={setSessions} onRegenerate={() => navigate('create')} />
+          <StudyPlan
+            sessions={sessions}
+            subjects={subjects}
+            availability={availability}
+            planStatus={planStatus}
+            onSessionsChange={setSessions}
+            onRegenerate={() => navigate('create')}
+          />
         )}
         {activePage === 'subjects' && <Subjects subjects={subjects} onUpdate={setSubjects} />}
         {activePage === 'settings' && (
@@ -197,19 +178,25 @@ function PageHeading({ eyebrow, title, subtitle, actions }) {
   )
 }
 
-function Dashboard({ subjects, exams, sessions, availability, planStatus, onNavigate }) {
-  const today = '2026-11-23'
+function Dashboard({ subjects, exams, sessions, availability, onNavigate }) {
+  const [currentDate] = useState(() => new Date())
+  const today = formatLocalDate(currentDate)
+  const now = currentDate
+  const dateLabel = now.toLocaleDateString('en', { weekday: 'long', day: 'numeric', month: 'long' })
   const todaySessions = sessions.filter((session) => session.date === today)
   const completed = sessions.filter((session) => session.completed).length
   const plannedHours = sessions.reduce((total, session) => total + session.duration, 0) / 60
-  const sortedExams = [...exams].sort((a, b) => new Date(a.date) - new Date(b.date))
+  const todayDate = formatLocalDate(new Date())
+  const sortedExams = exams
+    .filter((exam) => isValidExamDate(exam.date) && exam.date >= todayDate)
+    .sort((a, b) => new Date(a.date) - new Date(b.date))
   const attention = subjects.filter((subject) => subject.difficulty === 'Hard' || subject.confidence === 'Low').slice(0, 3)
 
   return (
     <div className="page dashboard-page">
       <PageHeading
-        eyebrow="Sunday, 22 November"
-        title="Good morning, Ayush"
+        eyebrow={dateLabel}
+        title="Welcome, Student"
         subtitle="Here's how your study plan is shaping up."
         actions={<button className="primary-button" onClick={() => onNavigate('create')}><Plus size={18} /> Generate Study Plan</button>}
       />
@@ -254,14 +241,18 @@ function Dashboard({ subjects, exams, sessions, availability, planStatus, onNavi
 
         <section className="card attention-card">
           <div className="card-heading"><div><span className="section-kicker">FOCUS AREA</span><h2>Subjects requiring attention</h2></div></div>
-          <div className="attention-list">
-            {attention.map((subject) => (
+          {attention.length ? (
+            <div className="attention-list">
+              {attention.map((subject) => (
               <div className="attention-row" key={subject.id}>
                 <div className={`subject-avatar ${subject.name.charAt(0) === 'C' ? 'green' : ''}`}>{subject.name.slice(0, 2).toUpperCase()}</div>
                 <div className="attention-info"><div><strong>{subject.name}</strong><span>{subject.progress}%</span></div><div className="progress-track"><div style={{ width: `${subject.progress}%` }} /></div></div>
               </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : (
+            <EmptyState compact icon={<Target />} title="No focus areas yet" text="Add subjects to identify where to focus." />
+          )}
         </section>
 
         <section className="card progress-card">
@@ -293,22 +284,49 @@ function CreatePlan({ subjects, exams, availability, preferences, onGenerate, on
   const [draftPreferences, setDraftPreferences] = useState({ ...preferences })
   const [errors, setErrors] = useState({})
   const [generating, setGenerating] = useState(false)
+  const [generationError, setGenerationError] = useState('')
 
   const validateStep = () => {
     const nextErrors = {}
     if (step === 1) {
+      const names = draftSubjects.map((subject) => subject.name.trim().toLowerCase()).filter(Boolean)
       draftSubjects.forEach((subject, index) => {
-        if (!subject.name.trim()) nextErrors[`subject-${index}`] = 'Subject name is required'
-        if (!subject.topics?.some((topic) => topic.trim())) nextErrors[`topics-${index}`] = 'Add at least one topic'
+        const name = subject.name.trim()
+        if (!name) {
+          nextErrors[`subject-${index}`] = 'Subject name is required'
+        } else if (names.filter((item) => item === name.toLowerCase()).length > 1) {
+          nextErrors[`subject-${index}`] = 'Subject names must be unique'
+        }
+        const topics = (subject.topics || []).map((topic) => topic.trim()).filter(Boolean)
+        if (!topics.length) nextErrors[`topics-${index}`] = 'Add at least one topic'
       })
     }
     if (step === 2) {
       draftExams.forEach((exam, index) => {
-        if (!exam.subjectId) nextErrors[`exam-subject-${index}`] = 'Select a subject'
-        if (!exam.date) nextErrors[`exam-date-${index}`] = 'Select an exam date'
+        const subjectExists = draftSubjects.some((subject) => subject.id === exam.subjectId && subject.name.trim())
+        if (!exam.subjectId || !subjectExists) nextErrors[`exam-subject-${index}`] = 'Select a subject from the subject list'
+        if (!exam.date) {
+          nextErrors[`exam-date-${index}`] = 'Select an exam date'
+        } else if (!isValidExamDate(exam.date)) {
+          nextErrors[`exam-date-${index}`] = 'Enter a valid today-or-future exam date'
+        }
       })
     }
-    if (step === 3 && (!draftAvailability.hours || draftAvailability.hours < 1)) nextErrors.hours = 'Enter at least 1 hour'
+    if (step === 3) {
+      const hours = Number(draftAvailability.hours)
+      if (!Number.isFinite(hours) || hours < 1 || hours > 16) {
+        nextErrors.hours = 'Enter between 1 and 16 available hours'
+      }
+      if (timeToMinutes(draftAvailability.startTime) === null) {
+        nextErrors.startTime = 'Enter a valid preferred start time'
+      }
+      if (![25, 50, 90].includes(Number(draftAvailability.sessionDuration))) {
+        nextErrors.sessionDuration = 'Select a valid session duration'
+      }
+      if (!draftAvailability.unavailableDays) {
+        nextErrors.unavailableDays = 'Availability is incomplete'
+      }
+    }
     setErrors(nextErrors)
     return Object.keys(nextErrors).length === 0
   }
@@ -327,11 +345,22 @@ function CreatePlan({ subjects, exams, availability, preferences, onGenerate, on
   } : item))
 
   const generate = () => {
+    setGenerationError('')
     if (!validateStep()) return
     setGenerating(true)
-    setTimeout(() => {
-      onGenerate({ subjects: draftSubjects, exams: draftExams, availability: draftAvailability, preferences: draftPreferences })
-    }, 700)
+    const normalizedSubjects = draftSubjects.map((subject) => ({
+      ...subject,
+      name: subject.name.trim(),
+      topics: [...new Set(subject.topics.map((topic) => topic.trim()).filter(Boolean))],
+    }))
+    const result = onGenerate({
+      subjects: normalizedSubjects,
+      exams: draftExams,
+      availability: draftAvailability,
+      preferences: draftPreferences,
+    })
+    setGenerating(false)
+    if (!result?.ok) setGenerationError(result?.message || 'Study plan generation could not be started.')
   }
 
   return (
@@ -389,8 +418,8 @@ function CreatePlan({ subjects, exams, availability, preferences, onGenerate, on
               <div className="form-heading"><div><span className="section-kicker">STEP 3 OF 4</span><h2>When can you study?</h2></div></div>
               <div className="form-grid">
                 <label className="field">Daily available hours<input type="number" min="1" max="16" value={draftAvailability.hours} onChange={(event) => setDraftAvailability((current) => ({ ...current, hours: Number(event.target.value) }))} />{errors.hours && <span className="field-error">{errors.hours}</span>}</label>
-                <label className="field">Preferred start time<input type="time" value={draftAvailability.startTime} onChange={(event) => setDraftAvailability((current) => ({ ...current, startTime: event.target.value }))} /></label>
-                <label className="field">Session duration<select value={draftAvailability.sessionDuration} onChange={(event) => setDraftAvailability((current) => ({ ...current, sessionDuration: Number(event.target.value) }))}><option value="25">25 minutes</option><option value="50">50 minutes</option><option value="90">90 minutes</option></select></label>
+                <label className="field">Preferred start time<input type="time" value={draftAvailability.startTime} onChange={(event) => setDraftAvailability((current) => ({ ...current, startTime: event.target.value }))} />{errors.startTime && <span className="field-error">{errors.startTime}</span>}</label>
+                <label className="field">Session duration<select value={draftAvailability.sessionDuration} onChange={(event) => setDraftAvailability((current) => ({ ...current, sessionDuration: Number(event.target.value) }))}><option value="25">25 minutes</option><option value="50">50 minutes</option><option value="90">90 minutes</option></select>{errors.sessionDuration && <span className="field-error">{errors.sessionDuration}</span>}</label>
                 <label className="field">Break duration<select value={draftAvailability.breakDuration} onChange={(event) => setDraftAvailability((current) => ({ ...current, breakDuration: Number(event.target.value) }))}><option value="5">5 minutes</option><option value="10">10 minutes</option><option value="15">15 minutes</option></select></label>
               </div>
               <label className="field">Days unavailable</label>
@@ -411,6 +440,9 @@ function CreatePlan({ subjects, exams, availability, preferences, onGenerate, on
                 <ToggleRow label="Include practice questions" description="Add focused question-solving sessions" checked={draftPreferences.practiceQuestions} onChange={(checked) => setDraftPreferences((current) => ({ ...current, practiceQuestions: checked }))} />
                 <ToggleRow label="Include mock tests" description="Reserve time for timed practice tests" checked={draftPreferences.mockTests} onChange={(checked) => setDraftPreferences((current) => ({ ...current, mockTests: checked }))} />
               </div>
+              {generationError && (
+                <div className="generation-error" role="alert"><AlertCircle size={17} /><span>{generationError}</span></div>
+              )}
               <div className="plan-summary">
                 <h3>Plan summary</h3>
                 <div><span><strong>{draftSubjects.length}</strong> subjects</span><span><strong>{draftExams.length}</strong> examinations</span><span><strong>{draftAvailability.hours}h</strong> daily</span></div>
@@ -433,10 +465,11 @@ function ToggleRow({ label, description, checked, onChange }) {
   return <div className="toggle-row"><div><strong>{label}</strong><span>{description}</span></div><button type="button" role="switch" aria-checked={checked} className={`toggle ${checked ? 'on' : ''}`} onClick={() => onChange(!checked)}><span /></button></div>
 }
 
-function StudyPlan({ sessions, planStatus, onSessionsChange, onRegenerate }) {
+function StudyPlan({ sessions, subjects, availability, planStatus, onSessionsChange, onRegenerate }) {
   const [view, setView] = useState('daily')
-  const [selectedDate, setSelectedDate] = useState(sessions[0]?.date || '2026-11-23')
+  const [selectedDate, setSelectedDate] = useState(sessions[0]?.date || '')
   const [editingSession, setEditingSession] = useState(null)
+  const [editError, setEditError] = useState('')
   const dates = useMemo(() => [...new Set(sessions.map((session) => session.date))].sort(), [sessions])
   const visibleSessions = view === 'daily'
     ? sessions.filter((session) => session.date === selectedDate)
@@ -450,13 +483,59 @@ function StudyPlan({ sessions, planStatus, onSessionsChange, onRegenerate }) {
   const saveEdit = (event) => {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
+    const subjectName = String(form.get('subject')).trim()
+    const topic = String(form.get('topic')).trim()
+    const startTime = String(form.get('startTime'))
+    const endTime = String(form.get('endTime'))
+    const startMinutes = timeToMinutes(startTime)
+    const endMinutes = timeToMinutes(endTime)
+    const subjectExists = subjects.some((subject) => subject.name.toLowerCase() === subjectName.toLowerCase())
+    const sessionDate = editingSession.date
+    const weekday = new Date(`${sessionDate}T00:00:00`).toLocaleDateString('en', { weekday: 'long' })
+
+    if (!subjectExists) {
+      setEditError('Select an existing subject.')
+      return
+    }
+    if (!topic) {
+      setEditError('A session topic is required.')
+      return
+    }
+    if (startMinutes === null || endMinutes === null || endMinutes <= startMinutes) {
+      setEditError('Enter valid start and end times, with end time after start time.')
+      return
+    }
+    const availabilityStart = timeToMinutes(availability.startTime)
+    const dailyMinutes = Number(availability.hours) * 60
+    if (startMinutes < availabilityStart || endMinutes - startMinutes > dailyMinutes) {
+      setEditError('The session must remain within your preferred start time and daily availability.')
+      return
+    }
+    if (availability.unavailableDays?.includes(weekday)) {
+      setEditError(`The session is scheduled on ${weekday}, which is unavailable.`)
+      return
+    }
+    const existingMinutes = sessions
+      .filter((session) => session.id !== editingSession.id && session.date === sessionDate)
+      .reduce((total, session) => {
+        const sessionStart = timeToMinutes(session.startTime)
+        const sessionEnd = timeToMinutes(session.endTime)
+        return sessionStart === null || sessionEnd === null ? total : total + (sessionEnd - sessionStart)
+      }, 0)
+    if (existingMinutes + (endMinutes - startMinutes) > dailyMinutes) {
+      setEditError('This session would exceed the daily study-hour limit.')
+      return
+    }
+
+    setEditError('')
     onSessionsChange(sessions.map((session) => session.id === editingSession.id ? {
       ...session,
-      subject: form.get('subject'),
-      topic: form.get('topic'),
-      startTime: form.get('startTime'),
-      endTime: form.get('endTime'),
-      type: form.get('type'),
+      subject: subjectName,
+      topic,
+      startTime,
+      endTime,
+      type: String(form.get('type')),
+      duration: endMinutes - startMinutes,
     } : session))
     setEditingSession(null)
   }
@@ -503,12 +582,13 @@ function StudyPlan({ sessions, planStatus, onSessionsChange, onRegenerate }) {
           <form className="modal card" onSubmit={saveEdit}>
             <div className="modal-heading"><div><span className="section-kicker">EDIT SESSION</span><h2>Update study session</h2></div><button type="button" className="icon-button bare" onClick={() => setEditingSession(null)}><X size={18} /></button></div>
             <div className="form-grid">
-              <label className="field">Subject<input name="subject" defaultValue={editingSession.subject} required /></label>
+              <label className="field">Subject<select name="subject" defaultValue={editingSession.subject} required><option value="">Select subject</option>{subjects.map((subject) => <option key={subject.id} value={subject.name}>{subject.name}</option>)}</select></label>
               <label className="field">Topic<input name="topic" defaultValue={editingSession.topic} required /></label>
               <label className="field">Start time<input name="startTime" type="time" defaultValue={editingSession.startTime} required /></label>
               <label className="field">End time<input name="endTime" type="time" defaultValue={editingSession.endTime} required /></label>
               <label className="field">Activity type<select name="type" defaultValue={editingSession.type}><option>Learning</option><option>Revision</option><option>Practice</option><option>Mock Test</option></select></label>
             </div>
+            {editError && <div className="generation-error" role="alert"><AlertCircle size={17} /><span>{editError}</span></div>}
             <div className="modal-footer"><button type="button" className="secondary-button" onClick={() => setEditingSession(null)}>Cancel</button><button type="submit" className="primary-button">Save changes</button></div>
           </form>
         </div>
@@ -520,30 +600,52 @@ function StudyPlan({ sessions, planStatus, onSessionsChange, onRegenerate }) {
 function Subjects({ subjects, onUpdate }) {
   const [search, setSearch] = useState('')
   const [editing, setEditing] = useState(null)
+  const [subjectError, setSubjectError] = useState('')
   const filtered = subjects.filter((subject) => subject.name.toLowerCase().includes(search.toLowerCase()))
 
   const save = (event) => {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
-    onUpdate(subjects.map((subject) => subject.id === editing.id ? {
+    const name = String(form.get('name')).trim()
+    const topics = [...new Set(String(form.get('topics')).split(',').map((topic) => topic.trim()).filter(Boolean))]
+    if (!name) {
+      setSubjectError('Subject name is required.')
+      return
+    }
+    if (!topics.length) {
+      setSubjectError('Add at least one topic.')
+      return
+    }
+    if (subjects.some((subject) => subject.id !== editing.id && subject.name.toLowerCase() === name.toLowerCase())) {
+      setSubjectError('A subject with this name already exists.')
+      return
+    }
+    setSubjectError('')
+    onUpdate(editing.id && subjects.some((subject) => subject.id === editing.id) ? subjects.map((subject) => subject.id === editing.id ? {
       ...subject,
-      name: form.get('name'),
-      difficulty: form.get('difficulty'),
-      confidence: form.get('confidence'),
-      topics: form.get('topics').split(',').map((topic) => topic.trim()).filter(Boolean),
-    } : subject))
+      name,
+      difficulty: String(form.get('difficulty')),
+      confidence: String(form.get('confidence')),
+      topics,
+    } : subject) : [...subjects, {
+      ...editing,
+      name,
+      difficulty: String(form.get('difficulty')),
+      confidence: String(form.get('confidence')),
+      topics,
+    }])
     setEditing(null)
   }
 
   return (
     <div className="page subjects-page">
-      <PageHeading title="My subjects" subtitle="Track the subjects and topics in your study plan." actions={<button className="primary-button" onClick={() => setEditing({ id: `sub-${Date.now()}`, name: '', topics: [], difficulty: 'Medium', confidence: 'Medium', progress: 0 })}><Plus size={17} /> Add subject</button>} />
+      <PageHeading title="My subjects" subtitle="Track the subjects and topics in your study plan." actions={<button className="primary-button" onClick={() => { setSubjectError(''); setEditing({ id: `sub-${Date.now()}`, name: '', topics: [], difficulty: 'Medium', confidence: 'Medium', progress: 0 }) }}><Plus size={17} /> Add subject</button>} />
       <div className="subject-toolbar card"><div className="search-box in-card"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search subjects..." /></div><span>{filtered.length} subjects</span></div>
       {filtered.length ? (
         <div className="subjects-grid">
           {filtered.map((subject) => (
             <article className="subject-card card" key={subject.id}>
-              <div className="subject-card-top"><div className="subject-avatar">{subject.name.slice(0, 2).toUpperCase()}</div><button className="icon-button bare" onClick={() => setEditing(subject)} aria-label={`Edit ${subject.name}`}><Edit3 size={16} /></button></div>
+              <div className="subject-card-top"><div className="subject-avatar">{subject.name.slice(0, 2).toUpperCase()}</div><button className="icon-button bare" onClick={() => { setSubjectError(''); setEditing(subject) }} aria-label={`Edit ${subject.name}`}><Edit3 size={16} /></button></div>
               <h2>{subject.name}</h2>
               <div className="subject-meta"><span className={`difficulty ${subject.difficulty.toLowerCase()}`}>{subject.difficulty}</span><span>{subject.confidence} confidence</span></div>
               <div className="topic-list">{subject.topics.slice(0, 3).map((topic) => <span key={topic}>{topic}</span>)}{subject.topics.length > 3 && <span>+{subject.topics.length - 3}</span>}</div>
@@ -563,6 +665,7 @@ function Subjects({ subjects, onUpdate }) {
               <label className="field">Confidence<select name="confidence" defaultValue={editing.confidence}><option>Low</option><option>Medium</option><option>High</option></select></label>
               <label className="field full">Topics<textarea name="topics" defaultValue={editing.topics.join(', ')} placeholder="Separate topics with commas" /></label>
             </div>
+            {subjectError && <div className="generation-error" role="alert"><AlertCircle size={17} /><span>{subjectError}</span></div>}
             <div className="modal-footer"><button type="button" className="secondary-button" onClick={() => setEditing(null)}>Cancel</button><button type="submit" className="primary-button">Save subject</button></div>
           </form>
         </div>
@@ -574,8 +677,15 @@ function Subjects({ subjects, onUpdate }) {
 function SettingsPage({ availability, preferences, onAvailabilityChange, onPreferencesChange }) {
   const [tab, setTab] = useState('study')
   const [saved, setSaved] = useState(false)
+  const [availabilityError, setAvailabilityError] = useState('')
 
   const save = () => {
+    if (tab === 'study' && (Number(availability.hours) < 1 || Number(availability.hours) > 16 || timeToMinutes(availability.startTime) === null)) {
+      setAvailabilityError('Daily hours must be between 1 and 16, and the start time must be valid.')
+      setSaved(false)
+      return
+    }
+    setAvailabilityError('')
     setSaved(true)
     setTimeout(() => setSaved(false), 1800)
   }
@@ -605,15 +715,16 @@ function SettingsPage({ availability, preferences, onAvailabilityChange, onPrefe
                 <ToggleRow label="Prioritize difficult topics" description="Give more time to challenging subjects" checked={preferences.difficultFirst} onChange={(checked) => onPreferencesChange({ ...preferences, difficultFirst: checked })} />
                 <ToggleRow label="Include practice questions" description="Add problem-solving sessions" checked={preferences.practiceQuestions} onChange={(checked) => onPreferencesChange({ ...preferences, practiceQuestions: checked })} />
               </div>
+              {availabilityError && <div className="generation-error" role="alert"><AlertCircle size={17} /><span>{availabilityError}</span></div>}
             </>
           ) : (
             <>
               <div className="settings-heading"><h2>Account preferences</h2><p>Update the information shown in your workspace.</p></div>
-              <div className="account-row"><div className="avatar profile">AS</div><div><strong>Ayush Sharma</strong><span>ayush.sharma@university.edu</span></div><button className="secondary-button">Change photo</button></div>
+              <div className="account-row"><div className="avatar profile"><User size={20} /></div><div><strong>Student</strong><span>Local prototype</span></div><button className="secondary-button" disabled>Profile photo</button></div>
               <div className="form-grid">
-                <label className="field">Full name<input defaultValue="Ayush Sharma" /></label>
-                <label className="field">Email address<input type="email" defaultValue="ayush.sharma@university.edu" /></label>
-                <label className="field">University<input defaultValue="State University" /></label>
+                <label className="field">Display name<input defaultValue="Student" /></label>
+                <label className="field">Email address<input type="email" placeholder="Not configured" /></label>
+                <label className="field">University<input placeholder="Not configured" /></label>
                 <label className="field">Timezone<select defaultValue="IST"><option>IST</option><option>UTC</option><option>EST</option><option>PST</option></select></label>
               </div>
             </>
