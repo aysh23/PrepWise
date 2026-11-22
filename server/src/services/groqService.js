@@ -76,23 +76,31 @@ export function mapGroqError(error) {
 // Groq strict Structured Outputs supports a subset of JSON Schema.
 // Keep shape constraints in the provider schema; Zod performs detailed validation.
 function toGroqStrictSchema(schema) {
-  const supportedKeys = new Set([
-    'type',
-    'properties',
-    'required',
-    'items',
-    'enum',
-    'additionalProperties',
-  ])
-
   if (Array.isArray(schema)) return schema.map(toGroqStrictSchema)
   if (!schema || typeof schema !== 'object') return schema
 
-  return Object.fromEntries(
-    Object.entries(schema)
-      .filter(([key]) => supportedKeys.has(key))
-      .map(([key, value]) => [key, toGroqStrictSchema(value)]),
-  )
+  const result = {}
+  for (const [key, value] of Object.entries(schema)) {
+    if (key === 'properties') {
+      result.properties = Object.fromEntries(
+        Object.entries(value).map(([propertyName, propertySchema]) => [
+          propertyName,
+          toGroqStrictSchema(propertySchema),
+        ]),
+      )
+    } else if (key === 'items') {
+      result.items = toGroqStrictSchema(value)
+    } else if (
+      key === 'type'
+      || key === 'required'
+      || key === 'enum'
+      || key === 'additionalProperties'
+    ) {
+      result[key] = value
+    }
+    // Unsupported constraints such as pattern/minimum/maximum stay in Zod validation.
+  }
+  return result
 }
 
 export function getGroqStatus() {
