@@ -19,7 +19,7 @@ There are two standalone prompt templates in `server/src/prompts/`. The third is
 
 | Version | Design change | Purpose | Evidence status |
 |---|---|---|---|
-| V1 - Baseline concept | One combined prompt asks the model to read subjects, exams and availability, prioritize topics and produce the timetable in one pass. | Establish a simple baseline design for the task. | Retrospectively documented as the initial design concept. It was not run as a controlled model experiment and no output score is claimed. |
+| V1 - Saved baseline draft | One combined prompt asks the model to read subjects, exams and availability, prioritize topics and produce the timetable in one pass. | Establish a simple baseline design for the task. | Saved as a distinct baseline design draft for the version log. It was not executed as a live model trial and no output score is claimed. |
 | V2 - Task decomposition | Separate the work into a study-analysis prompt and a timetable-generation prompt. The analysis stage identifies priorities and recommended study time; the second stage creates sessions using the analysis. | Reduce the amount of reasoning and scheduling work bundled into one instruction; make the workflow easier to inspect. | Implemented in `studyAnalysisPrompt.js`, `timetableGenerationPrompt.js` and `studyPlanService.js`. |
 | V3 - Structured and checked generation | Request strict JSON-schema output through Groq, validate it with Zod and a separate timetable validator, then construct a refinement prompt from validation errors/warnings for up to the configured attempt limit. | Make output machine-readable and catch hard-constraint violations before a plan is shown as successful. | Implemented in `groqService.js`, `studyPlanService.js` and `timetableValidator.js`; exercised by automated backend tests. |
 
@@ -45,4 +45,4 @@ Source: `buildRefinementPrompt()` in `server/src/services/studyPlanService.js`.
 
 ## Experimentation and honesty note
 
-The repository contains the current prompts and tests. It does not contain a controlled A/B experiment dataset with paired raw model outputs and quality scores for V1, V2 and V3. Therefore, this log records the design progression and implementation evidence; it does **not** claim measured percentage improvements or a controlled baseline win. The baseline row is a reconstructed design draft, not a historical live model run.
+The repository now contains the saved V1, V2 and V3 prompt drafts in `docs/milestone2/prompt-versions/`, the current implementation prompts, and tests. It does not contain a controlled A/B experiment dataset with paired raw model outputs and quality scores for V1, V2 and V3. Therefore, this log records the design progression and implementation evidence; it does **not** claim measured percentage improvements or a controlled baseline win. The baseline row is a reconstructed design draft, not a historical live model run.
