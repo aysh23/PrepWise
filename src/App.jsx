@@ -110,7 +110,7 @@ function App() {
     setPlanStatus(PLAN_STATUS.inputsSaved)
   }
 
-  const generatePlan = (input) => {
+  const generatePlan = async (input) => {
     const nextSubjects = input?.subjects?.length ? input.subjects : subjects
     const nextExams = input?.exams?.length ? input.exams : exams
     const nextAvailability = input?.availability || availability
@@ -121,9 +121,25 @@ function App() {
     setAvailability(nextAvailability)
     setPreferences(nextPreferences)
     setPlanStatus(PLAN_STATUS.draft)
-    const result = requestStudyPlan()
-    setPlanStatus(result.ok ? PLAN_STATUS.timetableGenerated : PLAN_STATUS.generationUnavailable)
-    setSessions(result.ok ? result.sessions : [])
+    const result = await requestStudyPlan({
+      subjects: nextSubjects,
+      exams: nextExams,
+      availability: nextAvailability,
+      preferences: nextPreferences,
+    })
+
+    if (result.ok) {
+      setSessions(result.sessions)
+      setPlanStatus(PLAN_STATUS.timetableGenerated)
+      navigate('plan')
+    } else {
+      setPlanStatus(
+        result.code === 'AI_GENERATION_NOT_CONFIGURED'
+          ? PLAN_STATUS.generationUnavailable
+          : PLAN_STATUS.generationFailed,
+      )
+    }
+
     return result
   }
 
@@ -446,7 +462,8 @@ function CreatePlan({ subjects, exams, availability, preferences, onSaveDraft, o
     ...(field === 'subjectId' ? { subject: draftSubjects.find((subject) => subject.id === value)?.name || '' } : {}),
   } : item))
 
-  const generate = () => {
+  const generate = async () => {
+    if (generating) return
     setGenerationError('')
     const allErrors = validateAllSteps()
     setErrors(allErrors)
@@ -462,14 +479,19 @@ function CreatePlan({ subjects, exams, availability, preferences, onSaveDraft, o
       name: subject.name.trim(),
       topics: [...new Set(subject.topics.map((topic) => topic.trim()).filter(Boolean))],
     }))
-    const result = onGenerate({
-      subjects: normalizedSubjects,
-      exams: draftExams,
-      availability: draftAvailability,
-      preferences: draftPreferences,
-    })
-    setGenerating(false)
-    if (!result?.ok) setGenerationError(result?.message || 'Study plan generation could not be started.')
+    try {
+      const result = await onGenerate({
+        subjects: normalizedSubjects,
+        exams: draftExams,
+        availability: draftAvailability,
+        preferences: draftPreferences,
+      })
+      if (!result?.ok) setGenerationError(result?.message || 'Study plan generation could not be started.')
+    } catch {
+      setGenerationError('The study plan request failed unexpectedly. Your inputs are still saved.')
+    } finally {
+      setGenerating(false)
+    }
   }
 
   return (
