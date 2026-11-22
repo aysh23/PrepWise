@@ -81,7 +81,7 @@ test('refines a mock timetable and returns only after validation succeeds', asyn
   const result = await generateStudyPlan(studentInput, {
     planningDate: '2099-12-21',
     refinementLimit: 1,
-    getOpenAIStatus: () => ({ configured: true, model: 'test-model' }),
+    getGroqStatus: () => ({ configured: true, model: 'test-model' }),
     generateStructuredResponse: mockedResponse,
   })
 
@@ -97,7 +97,7 @@ test('does not return success if refinement remains invalid', async () => {
     generateStudyPlan(studentInput, {
       planningDate: '2099-12-21',
       refinementLimit: 1,
-      getOpenAIStatus: () => ({ configured: true, model: 'test-model' }),
+      getGroqStatus: () => ({ configured: true, model: 'test-model' }),
       generateStructuredResponse: async ({ schemaName }) => {
         if (schemaName === 'prepwise_study_analysis') return analysis
         callIndex += 1
@@ -121,7 +121,7 @@ test('rejects analysis that omits a supplied subject', async () => {
     generateStudyPlan(studentInput, {
       planningDate: '2099-12-21',
       refinementLimit: 0,
-      getOpenAIStatus: () => ({ configured: true, model: 'test-model' }),
+      getGroqStatus: () => ({ configured: true, model: 'test-model' }),
       generateStructuredResponse: async ({ schemaName }) => {
         if (schemaName === 'prepwise_study_analysis') {
           return {
