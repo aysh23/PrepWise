@@ -33,6 +33,12 @@ const defaultPreferences = {
 }
 
 const DEFAULT_SESSIONS = []
+const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+let idCounter = 0
+function createId(prefix) {
+  idCounter += 1
+  return `${prefix}-${idCounter}`
+}
 
 function loadState(key, fallback) {
   return studyRepository.load(key, fallback)
@@ -58,15 +64,31 @@ function isValidExamDate(value) {
   return value >= formatLocalDate(new Date())
 }
 
+function isValidWeekdayList(days) {
+  return Array.isArray(days) && days.every((day) => WEEKDAYS.includes(day))
+}
+
+const PLAN_STATUS = {
+  inputsSaved: 'Study inputs saved',
+  draft: 'Draft study plan',
+  timetableGenerated: 'Timetable generated',
+  generationUnavailable: 'Timetable not generated',
+  generationFailed: 'Generation failed',
+}
+
+function normalizePlanStatus(value) {
+  return Object.values(PLAN_STATUS).includes(value) ? value : PLAN_STATUS.inputsSaved
+}
+
 function App() {
   const [activePage, setActivePage] = useState('dashboard')
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
-  const [subjects, setSubjects] = useState(() => loadState('prepwise_subjects', DEFAULT_SUBJECTS))
-  const [exams, setExams] = useState(() => loadState('prepwise_exams', DEFAULT_EXAMS))
-  const [availability, setAvailability] = useState(() => loadState('prepwise_availability', DEFAULT_AVAILABILITY))
-  const [preferences, setPreferences] = useState(() => loadState('prepwise_preferences', defaultPreferences))
-  const [sessions, setSessions] = useState(() => loadState('prepwise_sessions', DEFAULT_SESSIONS))
-  const [planStatus, setPlanStatus] = useState(() => loadState('prepwise_plan_status', 'Draft plan'))
+  const [subjects, setSubjects] = useState(() => loadState('subjects', DEFAULT_SUBJECTS))
+  const [exams, setExams] = useState(() => loadState('exams', DEFAULT_EXAMS))
+  const [availability, setAvailability] = useState(() => loadState('availability', DEFAULT_AVAILABILITY))
+  const [preferences, setPreferences] = useState(() => loadState('preferences', defaultPreferences))
+  const [sessions, setSessions] = useState(() => loadState('sessions', DEFAULT_SESSIONS))
+  const [planStatus, setPlanStatus] = useState(() => normalizePlanStatus(loadState('plan_status', PLAN_STATUS.inputsSaved)))
 
   useEffect(() => studyRepository.save('subjects', subjects), [subjects])
   useEffect(() => studyRepository.save('exams', exams), [exams])
@@ -80,6 +102,14 @@ function App() {
     setMobileNavOpen(false)
   }
 
+  const saveDraft = (input) => {
+    if (input.subjects) setSubjects(input.subjects)
+    if (input.exams) setExams(input.exams)
+    if (input.availability) setAvailability(input.availability)
+    if (input.preferences) setPreferences(input.preferences)
+    setPlanStatus(PLAN_STATUS.inputsSaved)
+  }
+
   const generatePlan = (input) => {
     const nextSubjects = input?.subjects?.length ? input.subjects : subjects
     const nextExams = input?.exams?.length ? input.exams : exams
@@ -90,8 +120,11 @@ function App() {
     setExams(nextExams)
     setAvailability(nextAvailability)
     setPreferences(nextPreferences)
-    setPlanStatus('AI generation unavailable')
-    return requestStudyPlan()
+    setPlanStatus(PLAN_STATUS.draft)
+    const result = requestStudyPlan()
+    setPlanStatus(result.ok ? PLAN_STATUS.timetableGenerated : PLAN_STATUS.generationUnavailable)
+    setSessions(result.ok ? result.sessions : [])
+    return result
   }
 
   return (
@@ -140,11 +173,12 @@ function App() {
             exams={exams}
             sessions={sessions}
             availability={availability}
+            planStatus={planStatus}
             onNavigate={navigate}
           />
         )}
         {activePage === 'create' && (
-          <CreatePlan subjects={subjects} exams={exams} availability={availability} preferences={preferences} onGenerate={generatePlan} onCancel={() => navigate('dashboard')} />
+          <CreatePlan subjects={subjects} exams={exams} availability={availability} preferences={preferences} onSaveDraft={saveDraft} onGenerate={generatePlan} onCancel={() => navigate('dashboard')} />
         )}
         {activePage === 'plan' && (
           <StudyPlan
@@ -178,7 +212,7 @@ function PageHeading({ eyebrow, title, subtitle, actions }) {
   )
 }
 
-function Dashboard({ subjects, exams, sessions, availability, onNavigate }) {
+function Dashboard({ subjects, exams, sessions, availability, planStatus, onNavigate }) {
   const [currentDate] = useState(() => new Date())
   const today = formatLocalDate(currentDate)
   const now = currentDate
@@ -186,7 +220,7 @@ function Dashboard({ subjects, exams, sessions, availability, onNavigate }) {
   const todaySessions = sessions.filter((session) => session.date === today)
   const completed = sessions.filter((session) => session.completed).length
   const plannedHours = sessions.reduce((total, session) => total + session.duration, 0) / 60
-  const todayDate = formatLocalDate(new Date())
+  const todayDate = today
   const sortedExams = exams
     .filter((exam) => isValidExamDate(exam.date) && exam.date >= todayDate)
     .sort((a, b) => new Date(a.date) - new Date(b.date))
@@ -198,7 +232,12 @@ function Dashboard({ subjects, exams, sessions, availability, onNavigate }) {
         eyebrow={dateLabel}
         title="Welcome, Student"
         subtitle="Here's how your study plan is shaping up."
-        actions={<button className="primary-button" onClick={() => onNavigate('create')}><Plus size={18} /> Generate Study Plan</button>}
+        actions={
+          <>
+            <div className={`plan-status-label ${planStatus === PLAN_STATUS.timetableGenerated ? 'ready' : ''}`}>{planStatus}</div>
+            <button className="primary-button" onClick={() => onNavigate('create')}><Plus size={18} /> Generate Study Plan</button>
+          </>
+        }
       />
 
       <div className="metric-grid">
@@ -276,10 +315,10 @@ function MetricCard({ icon, label, value, detail, tone }) {
   )
 }
 
-function CreatePlan({ subjects, exams, availability, preferences, onGenerate, onCancel }) {
+function CreatePlan({ subjects, exams, availability, preferences, onSaveDraft, onGenerate, onCancel }) {
   const [step, setStep] = useState(1)
-  const [draftSubjects, setDraftSubjects] = useState(subjects.length ? subjects.map((item) => ({ ...item })) : [{ id: `sub-${Date.now()}`, name: '', topics: [''], difficulty: 'Medium', confidence: 'Medium', progress: 0 }])
-  const [draftExams, setDraftExams] = useState(exams.length ? exams.map((item) => ({ ...item })) : [{ id: `exam-${Date.now()}`, subjectId: '', subject: '', date: '', priority: 'Medium' }])
+  const [draftSubjects, setDraftSubjects] = useState(subjects.length ? subjects.map((item) => ({ ...item })) : [{ id: createId('sub'), name: '', topics: [''], difficulty: 'Medium', confidence: 'Medium', progress: 0 }])
+  const [draftExams, setDraftExams] = useState(exams.length ? exams.map((item) => ({ ...item })) : [{ id: createId('exam'), subjectId: '', subject: '', date: '', priority: 'Medium' }])
   const [draftAvailability, setDraftAvailability] = useState({ ...availability })
   const [draftPreferences, setDraftPreferences] = useState({ ...preferences })
   const [errors, setErrors] = useState({})
@@ -289,6 +328,9 @@ function CreatePlan({ subjects, exams, availability, preferences, onGenerate, on
   const validateStep = () => {
     const nextErrors = {}
     if (step === 1) {
+      if (!draftSubjects.length) {
+        nextErrors.subjects = 'Add at least one subject'
+      }
       const names = draftSubjects.map((subject) => subject.name.trim().toLowerCase()).filter(Boolean)
       draftSubjects.forEach((subject, index) => {
         const name = subject.name.trim()
@@ -302,6 +344,10 @@ function CreatePlan({ subjects, exams, availability, preferences, onGenerate, on
       })
     }
     if (step === 2) {
+      if (!draftExams.length) {
+        nextErrors.exams = 'Add at least one examination'
+      }
+      const examKeys = draftExams.map((exam) => `${exam.subjectId}|${exam.date}`).filter((key) => !key.startsWith('|'))
       draftExams.forEach((exam, index) => {
         const subjectExists = draftSubjects.some((subject) => subject.id === exam.subjectId && subject.name.trim())
         if (!exam.subjectId || !subjectExists) nextErrors[`exam-subject-${index}`] = 'Select a subject from the subject list'
@@ -310,11 +356,17 @@ function CreatePlan({ subjects, exams, availability, preferences, onGenerate, on
         } else if (!isValidExamDate(exam.date)) {
           nextErrors[`exam-date-${index}`] = 'Enter a valid today-or-future exam date'
         }
+        if (exam.subjectId && exam.date) {
+          const key = `${exam.subjectId}|${exam.date}`
+          if (examKeys.filter((item) => item === key).length > 1) {
+            nextErrors[`exam-${index}`] = 'Duplicate examination: this subject already has an exam on this date'
+          }
+        }
       })
     }
     if (step === 3) {
       const hours = Number(draftAvailability.hours)
-      if (!Number.isFinite(hours) || hours < 1 || hours > 16) {
+      if (!Number.isInteger(hours) || hours < 1 || hours > 16) {
         nextErrors.hours = 'Enter between 1 and 16 available hours'
       }
       if (timeToMinutes(draftAvailability.startTime) === null) {
@@ -323,20 +375,70 @@ function CreatePlan({ subjects, exams, availability, preferences, onGenerate, on
       if (![25, 50, 90].includes(Number(draftAvailability.sessionDuration))) {
         nextErrors.sessionDuration = 'Select a valid session duration'
       }
-      if (!draftAvailability.unavailableDays) {
-        nextErrors.unavailableDays = 'Availability is incomplete'
-      }
+      const breakDuration = Number(draftAvailability.breakDuration)
+      if (!Number.isInteger(breakDuration) || breakDuration < 5 || breakDuration > 60) nextErrors.breakDuration = 'Break duration must be between 5 and 60 minutes'
+      if (!isValidWeekdayList(draftAvailability.unavailableDays)) nextErrors.unavailableDays = 'Unavailable days must be valid weekdays'
     }
     setErrors(nextErrors)
     return Object.keys(nextErrors).length === 0
   }
 
   const next = () => {
-    if (validateStep()) setStep((current) => Math.min(4, current + 1))
+    if (validateStep()) {
+      onSaveDraft({
+        subjects: draftSubjects,
+        exams: draftExams,
+        availability: draftAvailability,
+        preferences: draftPreferences,
+      })
+      setStep((current) => Math.min(4, current + 1))
+    }
+  }
+  const goToStep = (targetStep) => {
+    if (targetStep > step) {
+      if (!validateStep()) return
+      onSaveDraft({
+        subjects: draftSubjects,
+        exams: draftExams,
+        availability: draftAvailability,
+        preferences: draftPreferences,
+      })
+    }
+    setStep(targetStep)
+  }
+
+  const validateAllSteps = () => {
+    const combinedErrors = {}
+    if (!draftSubjects.length) combinedErrors.subjects = 'Add at least one subject'
+
+    const subjectNames = draftSubjects.map((subject) => subject.name.trim().toLowerCase()).filter(Boolean)
+    draftSubjects.forEach((subject, index) => {
+      if (!subject.name.trim()) combinedErrors[`subject-${index}`] = 'Subject name is required'
+      else if (subjectNames.filter((name) => name === subject.name.trim().toLowerCase()).length > 1) combinedErrors[`subject-${index}`] = 'Subject names must be unique'
+      if (!(subject.topics || []).some((topic) => topic.trim())) combinedErrors[`topics-${index}`] = 'Add at least one topic'
+    })
+
+    if (!draftExams.length) combinedErrors.exams = 'Add at least one examination'
+    const examKeys = draftExams.map((exam) => `${exam.subjectId}|${exam.date}`)
+    draftExams.forEach((exam, index) => {
+      if (!draftSubjects.some((subject) => subject.id === exam.subjectId && subject.name.trim())) combinedErrors[`exam-subject-${index}`] = 'Select an existing subject'
+      if (!isValidExamDate(exam.date)) combinedErrors[`exam-date-${index}`] = 'Enter a valid today-or-future exam date'
+      if (exam.subjectId && exam.date && examKeys.filter((key) => key === `${exam.subjectId}|${exam.date}`).length > 1) combinedErrors[`exam-${index}`] = 'Duplicate examination entry'
+    })
+
+    const hours = Number(draftAvailability.hours)
+    if (!Number.isInteger(hours) || hours < 1 || hours > 16) combinedErrors.hours = 'Enter between 1 and 16 available hours'
+    if (timeToMinutes(draftAvailability.startTime) === null) combinedErrors.startTime = 'Enter a valid preferred start time'
+    if (![25, 50, 90].includes(Number(draftAvailability.sessionDuration))) combinedErrors.sessionDuration = 'Select a valid session duration'
+    const breakDuration = Number(draftAvailability.breakDuration)
+    if (!Number.isInteger(breakDuration) || breakDuration < 5 || breakDuration > 60) combinedErrors.breakDuration = 'Break duration must be between 5 and 60 minutes'
+    if (!isValidWeekdayList(draftAvailability.unavailableDays)) combinedErrors.unavailableDays = 'Unavailable days must be valid weekdays'
+
+    return combinedErrors
   }
 
   const updateSubject = (index, field, value) => setDraftSubjects((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, [field]: value } : item))
-  const addSubject = () => setDraftSubjects((current) => [...current, { id: `sub-${Date.now()}`, name: '', topics: [''], difficulty: 'Medium', confidence: 'Medium', progress: 0 }])
+  const addSubject = () => setDraftSubjects((current) => [...current, { id: createId('sub'), name: '', topics: [''], difficulty: 'Medium', confidence: 'Medium', progress: 0 }])
   const removeSubject = (index) => setDraftSubjects((current) => current.filter((_, itemIndex) => itemIndex !== index))
   const updateExam = (index, field, value) => setDraftExams((current) => current.map((item, itemIndex) => itemIndex === index ? {
     ...item,
@@ -346,7 +448,14 @@ function CreatePlan({ subjects, exams, availability, preferences, onGenerate, on
 
   const generate = () => {
     setGenerationError('')
-    if (!validateStep()) return
+    const allErrors = validateAllSteps()
+    setErrors(allErrors)
+    if (Object.keys(allErrors).length) {
+      if (allErrors.subjects || Object.keys(allErrors).some((key) => key.startsWith('subject') || key.startsWith('topics'))) setStep(1)
+      else if (allErrors.exams || Object.keys(allErrors).some((key) => key.startsWith('exam'))) setStep(2)
+      else setStep(3)
+      return
+    }
     setGenerating(true)
     const normalizedSubjects = draftSubjects.map((subject) => ({
       ...subject,
@@ -374,7 +483,7 @@ function CreatePlan({ subjects, exams, availability, preferences, onGenerate, on
             ['Availability', 'When you can study'],
             ['Preferences', 'How you learn'],
           ].map(([title, subtitle], index) => (
-            <button key={title} className={`step-item ${step === index + 1 ? 'active' : ''} ${step > index + 1 ? 'complete' : ''}`} onClick={() => setStep(index + 1)}>
+            <button key={title} className={`step-item ${step === index + 1 ? 'active' : ''} ${step > index + 1 ? 'complete' : ''}`} onClick={() => goToStep(index + 1)}>
               <span className="step-number">{step > index + 1 ? <Check size={15} /> : index + 1}</span>
               <div><strong>{title}</strong><small>{subtitle}</small></div>
             </button>
@@ -385,6 +494,7 @@ function CreatePlan({ subjects, exams, availability, preferences, onGenerate, on
           {step === 1 && (
             <div className="form-step">
               <div className="form-heading"><div><span className="section-kicker">STEP 1 OF 4</span><h2>What are you studying?</h2></div><button className="secondary-button" onClick={addSubject}><Plus size={16} /> Add subject</button></div>
+              {errors.subjects && <div className="field-error form-error" role="alert">{errors.subjects}</div>}
               {draftSubjects.map((subject, index) => (
                 <div className="subject-form" key={subject.id}>
                   <div className="subject-form-header"><strong>Subject {index + 1}</strong>{draftSubjects.length > 1 && <button className="icon-button bare" onClick={() => removeSubject(index)} aria-label="Remove subject"><Trash2 size={16} /></button>}</div>
@@ -401,12 +511,14 @@ function CreatePlan({ subjects, exams, availability, preferences, onGenerate, on
 
           {step === 2 && (
             <div className="form-step">
-              <div className="form-heading"><div><span className="section-kicker">STEP 2 OF 4</span><h2>Add your examinations</h2></div><button className="secondary-button" onClick={() => setDraftExams((current) => [...current, { id: `exam-${Date.now()}`, subjectId: '', subject: '', date: '', priority: 'Medium' }])}><Plus size={16} /> Add exam</button></div>
+              <div className="form-heading"><div><span className="section-kicker">STEP 2 OF 4</span><h2>Add your examinations</h2></div><button className="secondary-button" onClick={() => setDraftExams((current) => [...current, { id: createId('exam'), subjectId: '', subject: '', date: '', priority: 'Medium' }])}><Plus size={16} /> Add exam</button></div>
+              {errors.exams && <div className="field-error form-error" role="alert">{errors.exams}</div>}
               {draftExams.map((exam, index) => (
                 <div className="exam-form" key={exam.id}>
                   <label className="field">Subject<select value={exam.subjectId} onChange={(event) => updateExam(index, 'subjectId', event.target.value)}><option value="">Select subject</option>{draftSubjects.filter((subject) => subject.name).map((subject) => <option key={subject.id} value={subject.id}>{subject.name}</option>)}</select>{errors[`exam-subject-${index}`] && <span className="field-error">{errors[`exam-subject-${index}`]}</span>}</label>
-                  <label className="field">Exam date<input type="date" value={exam.date} onChange={(event) => updateExam(index, 'date', event.target.value)} />{errors[`exam-date-${index}`] && <span className="field-error">{errors[`exam-date-${index}`]}</span>}</label>
+                  <label className="field">Exam date<input type="date" min={formatLocalDate(new Date())} value={exam.date} onChange={(event) => updateExam(index, 'date', event.target.value)} />{errors[`exam-date-${index}`] && <span className="field-error">{errors[`exam-date-${index}`]}</span>}</label>
                   <label className="field">Priority<select value={exam.priority} onChange={(event) => updateExam(index, 'priority', event.target.value)}><option>Low</option><option>Medium</option><option>High</option></select></label>
+                  {errors[`exam-${index}`] && <span className="field-error exam-wide-error">{errors[`exam-${index}`]}</span>}
                   {draftExams.length > 1 && <button className="icon-button bare exam-remove" onClick={() => setDraftExams((current) => current.filter((_, itemIndex) => itemIndex !== index))} aria-label="Remove exam"><Trash2 size={16} /></button>}
                 </div>
               ))}
@@ -420,14 +532,15 @@ function CreatePlan({ subjects, exams, availability, preferences, onGenerate, on
                 <label className="field">Daily available hours<input type="number" min="1" max="16" value={draftAvailability.hours} onChange={(event) => setDraftAvailability((current) => ({ ...current, hours: Number(event.target.value) }))} />{errors.hours && <span className="field-error">{errors.hours}</span>}</label>
                 <label className="field">Preferred start time<input type="time" value={draftAvailability.startTime} onChange={(event) => setDraftAvailability((current) => ({ ...current, startTime: event.target.value }))} />{errors.startTime && <span className="field-error">{errors.startTime}</span>}</label>
                 <label className="field">Session duration<select value={draftAvailability.sessionDuration} onChange={(event) => setDraftAvailability((current) => ({ ...current, sessionDuration: Number(event.target.value) }))}><option value="25">25 minutes</option><option value="50">50 minutes</option><option value="90">90 minutes</option></select>{errors.sessionDuration && <span className="field-error">{errors.sessionDuration}</span>}</label>
-                <label className="field">Break duration<select value={draftAvailability.breakDuration} onChange={(event) => setDraftAvailability((current) => ({ ...current, breakDuration: Number(event.target.value) }))}><option value="5">5 minutes</option><option value="10">10 minutes</option><option value="15">15 minutes</option></select></label>
+                <label className="field">Break duration<select value={draftAvailability.breakDuration} onChange={(event) => setDraftAvailability((current) => ({ ...current, breakDuration: Number(event.target.value) }))}><option value="5">5 minutes</option><option value="10">10 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">60 minutes</option></select>{errors.breakDuration && <span className="field-error">{errors.breakDuration}</span>}</label>
               </div>
               <label className="field">Days unavailable</label>
               <div className="day-selector">
-                {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((day) => (
+                {WEEKDAYS.map((day) => (
                   <button type="button" key={day} className={draftAvailability.unavailableDays.includes(day) ? 'selected' : ''} onClick={() => setDraftAvailability((current) => ({ ...current, unavailableDays: current.unavailableDays.includes(day) ? current.unavailableDays.filter((item) => item !== day) : [...current.unavailableDays, day] }))}>{day.slice(0, 3)}</button>
                 ))}
               </div>
+              {errors.unavailableDays && <div className="field-error form-error" role="alert">{errors.unavailableDays}</div>}
             </div>
           )}
 
@@ -471,13 +584,10 @@ function StudyPlan({ sessions, subjects, availability, planStatus, onSessionsCha
   const [editingSession, setEditingSession] = useState(null)
   const [editError, setEditError] = useState('')
   const dates = useMemo(() => [...new Set(sessions.map((session) => session.date))].sort(), [sessions])
+  const effectiveSelectedDate = dates.includes(selectedDate) ? selectedDate : (dates[0] || '')
   const visibleSessions = view === 'daily'
-    ? sessions.filter((session) => session.date === selectedDate)
+    ? sessions.filter((session) => session.date === effectiveSelectedDate)
     : sessions
-
-  useEffect(() => {
-    if (dates.length && !dates.includes(selectedDate)) setSelectedDate(dates[0])
-  }, [dates, selectedDate])
 
   const toggleCompleted = (id) => onSessionsChange(sessions.map((session) => session.id === id ? { ...session, completed: !session.completed } : session))
   const saveEdit = (event) => {
@@ -507,12 +617,23 @@ function StudyPlan({ sessions, subjects, availability, planStatus, onSessionsCha
     }
     const availabilityStart = timeToMinutes(availability.startTime)
     const dailyMinutes = Number(availability.hours) * 60
-    if (startMinutes < availabilityStart || endMinutes - startMinutes > dailyMinutes) {
-      setEditError('The session must remain within your preferred start time and daily availability.')
+    if (availabilityStart === null || startMinutes < availabilityStart || endMinutes > availabilityStart + dailyMinutes) {
+      setEditError('The session must stay within the configured availability window.')
       return
     }
     if (availability.unavailableDays?.includes(weekday)) {
       setEditError(`The session is scheduled on ${weekday}, which is unavailable.`)
+      return
+    }
+    const overlap = sessions.some((session) => {
+      if (session.id === editingSession.id || session.date !== sessionDate) return false
+      const existingStart = timeToMinutes(session.startTime)
+      const existingEnd = timeToMinutes(session.endTime)
+      if (existingStart === null || existingEnd === null) return false
+      return startMinutes < existingEnd && endMinutes > existingStart
+    })
+    if (overlap) {
+      setEditError('This session overlaps another session on the same date.')
       return
     }
     const existingMinutes = sessions
@@ -548,18 +669,18 @@ function StudyPlan({ sessions, subjects, availability, planStatus, onSessionsCha
         actions={
           <>
             <button className="secondary-button" onClick={onRegenerate}><RefreshCw size={16} /> Regenerate</button>
-            <div className="status-chip"><span className={planStatus === 'Ready' ? 'ready' : ''} />{planStatus}</div>
+            <div className="status-chip"><span className={planStatus === PLAN_STATUS.timetableGenerated ? 'ready' : ''} />{planStatus}</div>
           </>
         }
       />
       <div className="plan-toolbar card">
         <div className="segmented-control"><button className={view === 'daily' ? 'active' : ''} onClick={() => setView('daily')}>Daily</button><button className={view === 'weekly' ? 'active' : ''} onClick={() => setView('weekly')}>Weekly</button></div>
-        {view === 'daily' && <div className="date-tabs">{dates.map((date) => <button key={date} className={selectedDate === date ? 'active' : ''} onClick={() => setSelectedDate(date)}><strong>{new Date(date + 'T00:00:00').toLocaleString('en', { weekday: 'short' })}</strong><span>{new Date(date + 'T00:00:00').getDate()}</span></button>)}</div>}
+        {view === 'daily' && <div className="date-tabs">{dates.map((date) => <button key={date} className={effectiveSelectedDate === date ? 'active' : ''} onClick={() => setSelectedDate(date)}><strong>{new Date(date + 'T00:00:00').toLocaleString('en', { weekday: 'short' })}</strong><span>{new Date(date + 'T00:00:00').getDate()}</span></button>)}</div>}
       </div>
 
       {visibleSessions.length ? (
         <section className="sessions-card card">
-          <div className="sessions-header"><div><span className="section-kicker">{view === 'daily' ? 'DAILY TIMETABLE' : 'WEEKLY TIMETABLE'}</span><h2>{view === 'daily' ? new Date(selectedDate + 'T00:00:00').toLocaleDateString('en', { weekday: 'long', month: 'long', day: 'numeric' }) : 'Upcoming sessions'}</h2></div></div>
+          <div className="sessions-header"><div><span className="section-kicker">{view === 'daily' ? 'DAILY TIMETABLE' : 'WEEKLY TIMETABLE'}</span><h2>{view === 'daily' ? new Date(effectiveSelectedDate + 'T00:00:00').toLocaleDateString('en', { weekday: 'long', month: 'long', day: 'numeric' }) : 'Upcoming sessions'}</h2></div></div>
           <div className="session-table">
             {visibleSessions.map((session) => (
               <div className={`session-row ${session.completed ? 'completed' : ''}`} key={session.id}>
@@ -574,7 +695,15 @@ function StudyPlan({ sessions, subjects, availability, planStatus, onSessionsCha
           </div>
         </section>
       ) : (
-        <div className="card"><EmptyState icon={<CalendarDays />} title="No sessions scheduled" text="Create a study plan to add sessions to your timetable." action="Create study plan" onAction={onRegenerate} /></div>
+        <div className="card">
+          <EmptyState
+            icon={<CalendarDays />}
+            title={planStatus === PLAN_STATUS.generationUnavailable ? 'Timetable not generated' : 'No timetable generated'}
+            text={planStatus === PLAN_STATUS.generationUnavailable ? 'Your study inputs are saved. AI timetable generation is not configured yet, so no sessions were created.' : 'Create a study plan and add your inputs. A timetable is generated only when generation is available.'}
+            action="Review study inputs"
+            onAction={onRegenerate}
+          />
+        </div>
       )}
 
       {editingSession && (
@@ -639,7 +768,7 @@ function Subjects({ subjects, onUpdate }) {
 
   return (
     <div className="page subjects-page">
-      <PageHeading title="My subjects" subtitle="Track the subjects and topics in your study plan." actions={<button className="primary-button" onClick={() => { setSubjectError(''); setEditing({ id: `sub-${Date.now()}`, name: '', topics: [], difficulty: 'Medium', confidence: 'Medium', progress: 0 }) }}><Plus size={17} /> Add subject</button>} />
+      <PageHeading title="My subjects" subtitle="Track the subjects and topics in your study plan." actions={<button className="primary-button" onClick={() => { setSubjectError(''); setEditing({ id: createId('sub'), name: '', topics: [], difficulty: 'Medium', confidence: 'Medium', progress: 0 }) }}><Plus size={17} /> Add subject</button>} />
       <div className="subject-toolbar card"><div className="search-box in-card"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search subjects..." /></div><span>{filtered.length} subjects</span></div>
       {filtered.length ? (
         <div className="subjects-grid">
@@ -680,8 +809,21 @@ function SettingsPage({ availability, preferences, onAvailabilityChange, onPrefe
   const [availabilityError, setAvailabilityError] = useState('')
 
   const save = () => {
-    if (tab === 'study' && (Number(availability.hours) < 1 || Number(availability.hours) > 16 || timeToMinutes(availability.startTime) === null)) {
-      setAvailabilityError('Daily hours must be between 1 and 16, and the start time must be valid.')
+    const invalidAvailability =
+      tab === 'study' &&
+      (
+        !Number.isInteger(Number(availability.hours)) ||
+        Number(availability.hours) < 1 ||
+        Number(availability.hours) > 16 ||
+        timeToMinutes(availability.startTime) === null ||
+        ![25, 50, 90].includes(Number(availability.sessionDuration)) ||
+        !Number.isInteger(Number(availability.breakDuration)) ||
+        Number(availability.breakDuration) < 5 ||
+        Number(availability.breakDuration) > 60 ||
+        !isValidWeekdayList(availability.unavailableDays)
+      )
+    if (invalidAvailability) {
+      setAvailabilityError('Enter valid availability: 1–16 hours, a valid start time, 25/50/90-minute sessions, 5–60-minute breaks, and valid weekdays.')
       setSaved(false)
       return
     }
