@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-process.env.OPENAI_API_KEY = ''
+process.env.GROQ_API_KEY = ''
 const { createApp } = await import('../src/app.js')
 
 async function withServer(run) {
