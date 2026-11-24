@@ -27,3 +27,7 @@ export function createApp() {
 
   return app
 }
+
+// Vercel's Express runtime expects the app entry point to provide a default export.
+const app = createApp()
+export default app
