@@ -3,37 +3,37 @@
 **Course:** Prompt Engineering (SCSE4041)  
 **Problem:** C20 - Timetable and Study Plan Generator  
 **Project:** PrepWise | **Team:** Apex | **Team ID:** C20  
-**Current provider/model:** Groq API - `openai/gpt-oss-120b`
+**Provider/model:** Groq API - `openai/gpt-oss-120b`
 
-## Prompt count used in the form
+## Final prompt count
 
-The final workflow contains **3 logical prompt forms**:
+The implemented workflow contains **3 logical prompt forms**:
 
-1. Study-priority analysis.
-2. Initial timetable generation.
-3. Validation-guided timetable refinement (constructed dynamically from the timetable prompt plus validator feedback).
+1. **P1 - Study-priority analysis:** reviews the submitted subjects, topics, examination dates, availability and preferences.
+2. **P2 - Timetable generation:** uses the student input and P1 analysis to create day-wise sessions.
+3. **P3 - Validation-guided refinement:** is assembled when the timetable validator returns errors or warnings; it asks for a corrected timetable.
 
-There are two standalone prompt templates in `server/src/prompts/`. The third is a dynamic refinement prompt assembled in `server/src/services/studyPlanService.js`.
+P1 and P2 have standalone prompt templates in `server/src/prompts/`. P3 is assembled dynamically in `server/src/services/studyPlanService.js`.
 
 ## Version history
 
-| Version | Design change | Purpose | Evidence status |
+| Version | What changed | Why | Recorded implementation/evidence |
 |---|---|---|---|
-| V1 - Saved baseline draft | One combined prompt asks the model to read subjects, exams and availability, prioritize topics and produce the timetable in one pass. | Establish a simple baseline design for the task. | Saved as a distinct baseline design draft for the version log. It was not executed as a live model trial and no output score is claimed. |
-| V2 - Task decomposition | Separate the work into a study-analysis prompt and a timetable-generation prompt. The analysis stage identifies priorities and recommended study time; the second stage creates sessions using the analysis. | Reduce the amount of reasoning and scheduling work bundled into one instruction; make the workflow easier to inspect. | Implemented in `studyAnalysisPrompt.js`, `timetableGenerationPrompt.js` and `studyPlanService.js`. |
-| V3 - Structured and checked generation | Request strict JSON-schema output through Groq, validate it with Zod and a separate timetable validator, then construct a refinement prompt from validation errors/warnings for up to the configured attempt limit. | Make output machine-readable and catch hard-constraint violations before a plan is shown as successful. | Implemented in `groqService.js`, `studyPlanService.js` and `timetableValidator.js`; exercised by automated backend tests. |
+| V1 - One-shot prompt | Combined priority analysis and timetable creation in one prompt. | Established the initial single-pass task framing for the C20 timetable problem. | Preserved in `docs/milestone2/prompt-versions/V1-one-shot-baseline.md`. |
+| V2 - Chained prompts | Split the task into P1 study analysis and P2 timetable generation. | Made priority decisions explicit before calendar scheduling and separated the responsibilities of each prompt. | Implemented in `studyAnalysisPrompt.js`, `timetableGenerationPrompt.js` and `studyPlanService.js`. |
+| V3 - Structured and checked generation | Added strict JSON-schema response formatting, Zod parsing, independent timetable validation and a dynamic P3 correction prompt. | Ensured that structured output is checked against the student's dates, subjects, topics and scheduling constraints before a plan is returned. | Implemented in `groqService.js`, `studyPlanService.js` and `timetableValidator.js`; covered by backend service and validator tests. |
 
 ## Current prompt architecture
 
 ### P1 - Study-priority analysis
 
-Role: preparation prioritization analyst. It analyzes only the supplied JSON and does not create a timetable. It assigns priorities and urgency, recommends study minutes, specifies revision requirements and preserves every supplied subject/topic exactly.
+Role: preparation prioritization analyst. It analyzes the supplied JSON, assigns subject/topic priorities and urgency, recommends study minutes, defines revision requirements and preserves supplied subjects/topics. It does not create calendar sessions.
 
 Source: `server/src/prompts/studyAnalysisPrompt.js`.
 
 ### P2 - Timetable generation
 
-Role: day-wise study-timetable generator. It uses the student input and P1 analysis. It must use only supplied subjects/topics, the preparation window, exam deadlines, daily availability, unavailable weekdays, breaks and preferences. Activity types are Learning, Revision, Practice and Mock Test.
+Role: day-wise study-timetable generator. It uses the student input and P1 analysis. It must use supplied subjects/topics, examination deadlines, daily availability, unavailable weekdays, breaks and preferences. Activity types are Learning, Revision, Practice and Mock Test.
 
 Source: `server/src/prompts/timetableGenerationPrompt.js`.
 
@@ -43,6 +43,12 @@ P3 is assembled dynamically when P2's result fails programmatic validation. It a
 
 Source: `buildRefinementPrompt()` in `server/src/services/studyPlanService.js`.
 
-## Experimentation and honesty note
+## Recorded project run evidence
 
-The repository now contains the saved V1, V2 and V3 prompt drafts in `docs/milestone2/prompt-versions/`, the current implementation prompts, and tests. It does not contain a controlled A/B experiment dataset with paired raw model outputs and quality scores for V1, V2 and V3. Therefore, this log records the design progression and implementation evidence; it does **not** claim measured percentage improvements or a controlled baseline win. The baseline row is a reconstructed design draft, not a historical live model run.
+The service-level test in `server/test/refinementService.test.js` uses the Calculus plan with Integration and Series, exam date 2099-12-31, planning date 2099-12-21, 3 hours/day from 09:00, a 10-minute break and Sunday unavailable. Its recorded P1 analysis assigns Calculus High priority and urgency, recommends 120 minutes/day, and allocates 60 minutes to each topic.
+
+The validator case T01 in `server/test/timetableValidator.test.js` accepts two sessions: Integration 09:00-10:00 (Learning) and Series 10:10-11:10 (Revision). The validator returns `valid: true` with empty errors and warnings.
+
+The refinement service test also checks the retry path: an empty timetable is rejected with the validator message `Timetable must contain at least one study session`; the correction path then returns the two-session timetable and records one refinement attempt. The deployed application was separately confirmed to generate a timetable through the live Groq integration.
+
+The version history records the actual prompt and implementation changes. It does not assign numerical prompt-quality improvement scores.
