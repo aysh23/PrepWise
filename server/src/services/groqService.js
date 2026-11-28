@@ -5,10 +5,20 @@ import { AppError } from '../utils/errors.js'
 // The OpenAI SDK is used only as an HTTP-compatible client for Groq's API.
 let client
 
-export function mapGroqError(error) {
+export function mapGroqError(error, context = {}) {
   const status = error?.status ?? error?.statusCode
-  const providerCode = error?.code ?? error?.error?.code
-  const providerMessage = error?.error?.message ?? error?.message
+  // The OpenAI SDK may expose Groq's response body at different levels depending
+  // on the SDK/error version. Inspect the shape without logging request data.
+  const responseBody = error?.error ?? error?.response?.data ?? error?.cause?.error ?? {}
+  const providerError = responseBody?.error ?? responseBody
+  const providerCode = error?.code ?? providerError?.code
+  const providerMessage = providerError?.message ?? error?.message
+  const failedGeneration = providerError?.failed_generation
+    ?? responseBody?.failed_generation
+    ?? error?.failed_generation
+  const failedGenerationText = typeof failedGeneration === 'string'
+    ? failedGeneration
+    : failedGeneration == null ? undefined : JSON.stringify(failedGeneration)
 
   if (status === 402) {
     return new AppError(
@@ -43,7 +53,25 @@ export function mapGroqError(error) {
     )
   }
   if (status === 400) {
-    console.error('Groq rejected the request:', { providerCode, message: providerMessage })
+    console.error('Groq rejected structured generation:', {
+      model: env.GROQ_MODEL,
+      stage: context.stage ?? 'unknown',
+      schemaName: context.schemaName ?? 'unknown',
+      status,
+      errorName: error?.name,
+      providerCode,
+      message: providerMessage,
+      errorObjectKeys: error && typeof error === 'object' ? Object.keys(error) : [],
+      responseBodyKeys: responseBody && typeof responseBody === 'object' ? Object.keys(responseBody) : [],
+      providerErrorKeys: providerError && typeof providerError === 'object' ? Object.keys(providerError) : [],
+      failedGenerationType: failedGeneration === null ? 'null' : typeof failedGeneration,
+      failedGenerationLength: failedGenerationText?.length,
+      // Enable only for synthetic test inputs; this may contain generated content.
+      failedGenerationPreview: process.env.GROQ_DEBUG_FAILED_GENERATION === 'true'
+        && failedGenerationText
+        ? failedGenerationText.slice(0, 1200)
+        : undefined,
+    })
     return new AppError(
       502,
       'Groq rejected the generation request. Check the model and structured-output schema in the backend terminal.',
@@ -72,7 +100,6 @@ export function mapGroqError(error) {
     providerCode ? { providerCode } : undefined,
   )
 }
-
 // Groq strict Structured Outputs supports a subset of JSON Schema.
 // Keep shape constraints in the provider schema; Zod performs detailed validation.
 function toGroqStrictSchema(schema) {
@@ -121,7 +148,7 @@ function getGroqClient() {
   return client
 }
 
-export async function generateStructuredResponse({ prompt, input, schemaName, schema }) {
+export async function generateStructuredResponse({ prompt, input, schemaName, schema, stage = 'unknown' }) {
   const groqClient = getGroqClient()
   if (!groqClient) {
     throw new AppError(
@@ -132,28 +159,77 @@ export async function generateStructuredResponse({ prompt, input, schemaName, sc
     )
   }
 
+  const messages = [
+    {
+      role: 'system',
+      content: `${prompt}\n\nReturn only a JSON object matching the supplied schema. Do not include Markdown fences or commentary.`,
+    },
+    {
+      role: 'user',
+      content: JSON.stringify(input),
+    },
+  ]
+
+  const requestOptions = {
+    model: env.GROQ_MODEL,
+    messages,
+    temperature: 0.2,
+  }
+
   try {
-    const response = await groqClient.chat.completions.create({
+    let response
+    let outputMode = 'strict-json-schema'
+    try {
+      response = await groqClient.chat.completions.create({
+        ...requestOptions,
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: schemaName,
+            strict: true,
+            schema: toGroqStrictSchema(schema),
+          },
+        },
+      })
+    } catch (error) {
+      const responseBody = error?.error ?? error?.response?.data ?? error?.cause?.error ?? {}
+      const providerError = responseBody?.error ?? responseBody
+      const providerCode = error?.code ?? providerError?.code
+      const isTimetableSchemaRejection = schemaName === 'prepwise_timetable'
+        && (error?.status ?? error?.statusCode) === 400
+        && providerCode === 'json_validate_failed'
+
+      if (!isTimetableSchemaRejection) throw error
+
+      // Groq may reject strict constrained decoding before producing a response.
+      // JSON mode guarantees syntactically valid JSON; Zod and the independent
+      // timetable validator remain mandatory before any plan can be returned.
+      console.warn('Groq strict timetable output rejected; retrying with JSON mode:', {
+        model: env.GROQ_MODEL,
+        stage,
+        schemaName,
+        providerCode,
+      })
+      outputMode = 'json-object-fallback'
+      response = await groqClient.chat.completions.create({
+        ...requestOptions,
+        messages: [
+          ...messages,
+          {
+            role: 'system',
+            content: 'Return one syntactically valid JSON object only. Match every required field and allowed value from the timetable schema described in the instructions. Do not add Markdown or commentary.',
+          },
+        ],
+        response_format: { type: 'json_object' },
+      })
+    }
+
+    console.info('Groq structured generation completed:', {
       model: env.GROQ_MODEL,
-      messages: [
-        {
-          role: 'system',
-          content: `${prompt}\n\nReturn only a JSON object matching the supplied schema. Do not include Markdown fences or commentary.`,
-        },
-        {
-          role: 'user',
-          content: JSON.stringify(input),
-        },
-      ],
-      response_format: {
-        type: 'json_schema',
-        json_schema: {
-          name: schemaName,
-          strict: true,
-          schema: toGroqStrictSchema(schema),
-        },
-      },
-      temperature: 0.2,
+      stage,
+      schemaName,
+      outputMode,
+      completionTokens: response.usage?.completion_tokens,
     })
 
     const responseText = response.choices?.[0]?.message?.content
@@ -176,6 +252,6 @@ export async function generateStructuredResponse({ prompt, input, schemaName, sc
     }
   } catch (error) {
     if (error instanceof AppError) throw error
-    throw mapGroqError(error)
+    throw mapGroqError(error, { stage, schemaName })
   }
 }
