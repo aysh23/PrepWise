@@ -159,34 +159,76 @@ export async function generateStructuredResponse({ prompt, input, schemaName, sc
     )
   }
 
+  const messages = [
+    {
+      role: 'system',
+      content: `${prompt}\n\nReturn only a JSON object matching the supplied schema. Do not include Markdown fences or commentary.`,
+    },
+    {
+      role: 'user',
+      content: JSON.stringify(input),
+    },
+  ]
+
+  const requestOptions = {
+    model: env.GROQ_MODEL,
+    messages,
+    temperature: 0.2,
+  }
+
   try {
-    const response = await groqClient.chat.completions.create({
-      model: env.GROQ_MODEL,
-      messages: [
-        {
-          role: 'system',
-          content: `${prompt}\n\nReturn only a JSON object matching the supplied schema. Do not include Markdown fences or commentary.`,
+    let response
+    let outputMode = 'strict-json-schema'
+    try {
+      response = await groqClient.chat.completions.create({
+        ...requestOptions,
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: schemaName,
+            strict: true,
+            schema: toGroqStrictSchema(schema),
+          },
         },
-        {
-          role: 'user',
-          content: JSON.stringify(input),
-        },
-      ],
-      response_format: {
-        type: 'json_schema',
-        json_schema: {
-          name: schemaName,
-          strict: true,
-          schema: toGroqStrictSchema(schema),
-        },
-      },
-      temperature: 0.2,
-    })
+      })
+    } catch (error) {
+      const responseBody = error?.error ?? error?.response?.data ?? error?.cause?.error ?? {}
+      const providerError = responseBody?.error ?? responseBody
+      const providerCode = error?.code ?? providerError?.code
+      const isTimetableSchemaRejection = schemaName === 'prepwise_timetable'
+        && (error?.status ?? error?.statusCode) === 400
+        && providerCode === 'json_validate_failed'
+
+      if (!isTimetableSchemaRejection) throw error
+
+      // Groq may reject strict constrained decoding before producing a response.
+      // JSON mode guarantees syntactically valid JSON; Zod and the independent
+      // timetable validator remain mandatory before any plan can be returned.
+      console.warn('Groq strict timetable output rejected; retrying with JSON mode:', {
+        model: env.GROQ_MODEL,
+        stage,
+        schemaName,
+        providerCode,
+      })
+      outputMode = 'json-object-fallback'
+      response = await groqClient.chat.completions.create({
+        ...requestOptions,
+        messages: [
+          ...messages,
+          {
+            role: 'system',
+            content: 'Return one syntactically valid JSON object only. Match every required field and allowed value from the timetable schema described in the instructions. Do not add Markdown or commentary.',
+          },
+        ],
+        response_format: { type: 'json_object' },
+      })
+    }
 
     console.info('Groq structured generation completed:', {
       model: env.GROQ_MODEL,
       stage,
       schemaName,
+      outputMode,
       completionTokens: response.usage?.completion_tokens,
     })
 
