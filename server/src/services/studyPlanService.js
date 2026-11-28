@@ -119,6 +119,16 @@ ${JSON.stringify(validation.warnings)}
 Do not return an explanation instead of the JSON timetable.`
 }
 
+function buildProviderRetryPrompt() {
+  return `${timetableGenerationPrompt}
+
+The previous request was rejected by the provider's strict JSON validator before a timetable was returned.
+Retry with a compact, minimal timetable JSON object. Include only the required fields for each session.
+Do not add optional fields, commentary, Markdown, or extra properties.
+Keep the schedule concise while satisfying the supplied subjects, topics, dates, availability, and break constraints.
+Return the JSON object immediately.`
+}
+
 export async function generateStudyPlan(input, dependencies = {}) {
   let studentInput
   try {
@@ -175,20 +185,43 @@ export async function generateStudyPlan(input, dependencies = {}) {
 
   // Stage 2: generate a timetable, then independently validate every hard constraint.
   for (let attempt = 0; attempt <= maxAttempts; attempt += 1) {
-    const rawTimetable = await structuredResponse({
-      prompt: attempt === 0
-        ? timetableGenerationPrompt
-        : buildRefinementPrompt(validation),
-      input: {
-        studentInput,
-        analysis,
-        previousValidation: attempt === 0 ? null : validation,
-        currentDate: planningDate,
-      },
-      schemaName: 'prepwise_timetable',
-      stage: attempt === 0 ? 'P2-timetable' : 'P3-refinement',
-      schema: timetableJsonSchema,
-    })
+    let rawTimetable
+    try {
+      rawTimetable = await structuredResponse({
+        prompt: attempt === 0
+          ? timetableGenerationPrompt
+          : validation?.providerRejected
+            ? buildProviderRetryPrompt()
+            : buildRefinementPrompt(validation),
+        input: {
+          studentInput,
+          analysis,
+          previousValidation: attempt === 0 ? null : validation,
+          currentDate: planningDate,
+        },
+        schemaName: 'prepwise_timetable',
+        stage: attempt === 0 ? 'P2-timetable' : 'P3-refinement',
+        schema: timetableJsonSchema,
+      })
+    } catch (error) {
+      const isGroqJsonValidationFailure = error?.code === 'AI_REQUEST_REJECTED'
+        && error?.details?.providerCode === 'json_validate_failed'
+
+      // Groq can reject a structured response before returning any generated JSON.
+      // Give the bounded P3 recovery attempt a concise retry prompt; do not bypass
+      // Zod or the independent timetable validator.
+      if (isGroqJsonValidationFailure && attempt < maxAttempts) {
+        validation = {
+          valid: false,
+          providerRejected: true,
+          errors: ['Groq rejected the previous timetable response during strict JSON validation'],
+          warnings: [],
+        }
+        refinementAttempts = attempt + 1
+        continue
+      }
+      throw error
+    }
 
     let parsedTimetable
     try {
