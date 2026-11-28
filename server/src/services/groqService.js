@@ -5,10 +5,12 @@ import { AppError } from '../utils/errors.js'
 // The OpenAI SDK is used only as an HTTP-compatible client for Groq's API.
 let client
 
-export function mapGroqError(error) {
+export function mapGroqError(error, context = {}) {
   const status = error?.status ?? error?.statusCode
-  const providerCode = error?.code ?? error?.error?.code
-  const providerMessage = error?.error?.message ?? error?.message
+  const providerError = error?.error ?? error?.response?.data?.error ?? {}
+  const providerCode = error?.code ?? providerError.code
+  const providerMessage = providerError.message ?? error?.message
+  const failedGeneration = providerError.failed_generation ?? error?.failed_generation
 
   if (status === 402) {
     return new AppError(
@@ -43,7 +45,19 @@ export function mapGroqError(error) {
     )
   }
   if (status === 400) {
-    console.error('Groq rejected the request:', { providerCode, message: providerMessage })
+    console.error('Groq rejected structured generation:', {
+      model: env.GROQ_MODEL,
+      stage: context.stage ?? 'unknown',
+      schemaName: context.schemaName ?? 'unknown',
+      providerCode,
+      message: providerMessage,
+      failedGenerationLength: typeof failedGeneration === 'string' ? failedGeneration.length : undefined,
+      // Opt in temporarily when testing only with synthetic data. This may contain generated content.
+      failedGenerationPreview: process.env.GROQ_DEBUG_FAILED_GENERATION === 'true'
+        && typeof failedGeneration === 'string'
+        ? failedGeneration.slice(0, 1200)
+        : undefined,
+    })
     return new AppError(
       502,
       'Groq rejected the generation request. Check the model and structured-output schema in the backend terminal.',
@@ -121,7 +135,7 @@ function getGroqClient() {
   return client
 }
 
-export async function generateStructuredResponse({ prompt, input, schemaName, schema }) {
+export async function generateStructuredResponse({ prompt, input, schemaName, schema, stage = 'unknown' }) {
   const groqClient = getGroqClient()
   if (!groqClient) {
     throw new AppError(
@@ -156,6 +170,13 @@ export async function generateStructuredResponse({ prompt, input, schemaName, sc
       temperature: 0.2,
     })
 
+    console.info('Groq structured generation completed:', {
+      model: env.GROQ_MODEL,
+      stage,
+      schemaName,
+      completionTokens: response.usage?.completion_tokens,
+    })
+
     const responseText = response.choices?.[0]?.message?.content
     if (!responseText) {
       throw new AppError(
@@ -176,6 +197,6 @@ export async function generateStructuredResponse({ prompt, input, schemaName, sc
     }
   } catch (error) {
     if (error instanceof AppError) throw error
-    throw mapGroqError(error)
+    throw mapGroqError(error, { stage, schemaName })
   }
 }
