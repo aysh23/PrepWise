@@ -7,10 +7,18 @@ let client
 
 export function mapGroqError(error, context = {}) {
   const status = error?.status ?? error?.statusCode
-  const providerError = error?.error ?? error?.response?.data?.error ?? {}
-  const providerCode = error?.code ?? providerError.code
-  const providerMessage = providerError.message ?? error?.message
-  const failedGeneration = providerError.failed_generation ?? error?.failed_generation
+  // The OpenAI SDK may expose Groq's response body at different levels depending
+  // on the SDK/error version. Inspect the shape without logging request data.
+  const responseBody = error?.error ?? error?.response?.data ?? error?.cause?.error ?? {}
+  const providerError = responseBody?.error ?? responseBody
+  const providerCode = error?.code ?? providerError?.code
+  const providerMessage = providerError?.message ?? error?.message
+  const failedGeneration = providerError?.failed_generation
+    ?? responseBody?.failed_generation
+    ?? error?.failed_generation
+  const failedGenerationText = typeof failedGeneration === 'string'
+    ? failedGeneration
+    : failedGeneration == null ? undefined : JSON.stringify(failedGeneration)
 
   if (status === 402) {
     return new AppError(
@@ -49,13 +57,19 @@ export function mapGroqError(error, context = {}) {
       model: env.GROQ_MODEL,
       stage: context.stage ?? 'unknown',
       schemaName: context.schemaName ?? 'unknown',
+      status,
+      errorName: error?.name,
       providerCode,
       message: providerMessage,
-      failedGenerationLength: typeof failedGeneration === 'string' ? failedGeneration.length : undefined,
-      // Opt in temporarily when testing only with synthetic data. This may contain generated content.
+      errorObjectKeys: error && typeof error === 'object' ? Object.keys(error) : [],
+      responseBodyKeys: responseBody && typeof responseBody === 'object' ? Object.keys(responseBody) : [],
+      providerErrorKeys: providerError && typeof providerError === 'object' ? Object.keys(providerError) : [],
+      failedGenerationType: failedGeneration === null ? 'null' : typeof failedGeneration,
+      failedGenerationLength: failedGenerationText?.length,
+      // Enable only for synthetic test inputs; this may contain generated content.
       failedGenerationPreview: process.env.GROQ_DEBUG_FAILED_GENERATION === 'true'
-        && typeof failedGeneration === 'string'
-        ? failedGeneration.slice(0, 1200)
+        && failedGenerationText
+        ? failedGenerationText.slice(0, 1200)
         : undefined,
     })
     return new AppError(
@@ -86,7 +100,6 @@ export function mapGroqError(error, context = {}) {
     providerCode ? { providerCode } : undefined,
   )
 }
-
 // Groq strict Structured Outputs supports a subset of JSON Schema.
 // Keep shape constraints in the provider schema; Zod performs detailed validation.
 function toGroqStrictSchema(schema) {
