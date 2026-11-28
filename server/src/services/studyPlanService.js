@@ -154,6 +154,7 @@ export async function generateStudyPlan(input, dependencies = {}) {
       currentDate: planningDate,
     },
     schemaName: 'prepwise_study_analysis',
+    stage: 'P1-analysis',
     schema: studyAnalysisJsonSchema,
   })
 
@@ -185,6 +186,7 @@ export async function generateStudyPlan(input, dependencies = {}) {
         currentDate: planningDate,
       },
       schemaName: 'prepwise_timetable',
+      stage: attempt === 0 ? 'P2-timetable' : 'P3-refinement',
       schema: timetableJsonSchema,
     })
 
